@@ -1,0 +1,16 @@
+{
+  "solution": {
+    "path": "Mumble.sln",
+    "projects": [
+      "src\\Mumble.Abstractions\\Mumble.Abstractions.csproj",
+      "src\\Mumble.App\\Mumble.App.csproj",
+      "src\\Mumble.Core\\Mumble.Core.csproj",
+      "src\\Mumble.Dictionary\\Mumble.Dictionary.csproj",
+      "src\\Mumble.Speech\\Mumble.Speech.csproj",
+      "src\\Mumble.Testing\\Mumble.Testing.csproj",
+      "tests\\Mumble.App.Tests\\Mumble.App.Tests.csproj",
+      "tests\\Mumble.Core.Tests\\Mumble.Core.Tests.csproj",
+      "tests\\Mumble.Dictionary.Tests\\Mumble.Dictionary.Tests.csproj"
+    ]
+  }
+}

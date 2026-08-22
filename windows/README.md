@@ -108,14 +108,24 @@ projects, behind an interface.
 
 ## Building
 
+**On Windows** — everything, including the platform layer:
+
 ```bash
 cd windows
-dotnet restore Mumble.sln
-dotnet build   Mumble.sln --no-incremental -warnaserror
-dotnet test    Mumble.sln
+dotnet build Mumble.sln --no-incremental -warnaserror
+dotnet test  Mumble.sln
 ```
 
-`--no-incremental` is not optional. Roslyn does not re-emit analyzer warnings on an
+**On macOS or Linux** — use the solution filter. `Mumble.Platform.Windows` targets
+`net10.0-windows` and cannot compile off Windows; the filter omits it and everything else
+builds and tests normally, including the full UI suite:
+
+```bash
+cd windows
+dotnet test Mumble.CrossPlatform.slnf -c Release      # ~0.5s, 63 tests
+```
+
+`--no-incremental` is not optional in CI. Roslyn does not re-emit analyzer warnings on an
 incremental build, so `-warnaserror` would pass on cached results and prove nothing.
 
 ---
