@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- Plain net10.0, NOT net10.0-windows. Avalonia is cross-platform, and this is what
+         lets the UI be built and headless-tested on macOS — the reason Avalonia was chosen
+         over WPF. Windows-only code lives in Mumble.Platform.Windows. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Mumble.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Mumble.Core\Mumble.Core.csproj" />
+    <ProjectReference Include="..\Mumble.Speech\Mumble.Speech.csproj" />
+  </ItemGroup>
+</Project>
