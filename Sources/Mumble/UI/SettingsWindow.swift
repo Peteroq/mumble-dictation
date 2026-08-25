@@ -76,7 +76,11 @@ struct SettingsWindow: View {
                                 ) {
                                     settings.cleanupTier = tier
                                 }
-                                .disabled(tier.unavailableReason != nil)
+                                // Only on-device is disabled when unavailable — there's
+                                // nothing to configure in-app for it. Claude must stay
+                                // selectable even with no key yet, because selecting it is
+                                // how the key field below appears.
+                                .disabled(tier == .onDevice && FoundationModelFormatter.unavailableReason != nil)
                                 .background {
                                     if settings.cleanupTier == tier {
                                         RoundedRectangle(cornerRadius: DS.Radius.control)
