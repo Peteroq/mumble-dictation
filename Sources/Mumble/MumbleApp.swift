@@ -210,9 +210,13 @@ private struct MenuContent: View {
         Toggle("Clean up text", isOn: $settings.cleanupEnabled)
 
         if settings.cleanupEnabled {
-            Toggle("Smart cleanup (on-device AI)", isOn: $settings.smartCleanup)
-                .disabled(!FoundationModelFormatter.isAvailable)
-            if let reason = FoundationModelFormatter.unavailableReason {
+            Picker("Cleanup tier", selection: $settings.cleanupTier) {
+                ForEach(CleanupTier.allCases, id: \.self) { tier in
+                    Text(tier.displayName).tag(tier)
+                        .disabled(tier.unavailableReason != nil)
+                }
+            }
+            if let reason = settings.cleanupTier.unavailableReason {
                 Text(reason).font(.caption)
             }
         }

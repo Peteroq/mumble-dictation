@@ -5,6 +5,7 @@ import SwiftUI
 struct SettingsWindow: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
+    @State private var apiKeyInput = APIKeyStore.storedKey ?? ""
 
     var body: some View {
         ZStack {
@@ -64,13 +65,54 @@ struct SettingsWindow: View {
                     .toggleStyle(.switch)
                     note("Strips fillers, fixes spacing and punctuation. The dictionary's "
                         + "corrections run either way.")
+
+                    if settings.cleanupEnabled {
+                        HStack(spacing: DS.Space.snug) {
+                            ForEach(CleanupTier.allCases, id: \.self) { tier in
+                                TransportKey(
+                                    title: tier.displayName,
+                                    isEngaged: settings.cleanupTier == tier,
+                                    engagedColor: DS.Color.ink
+                                ) {
+                                    settings.cleanupTier = tier
+                                }
+                                .disabled(tier.unavailableReason != nil)
+                                .background {
+                                    if settings.cleanupTier == tier {
+                                        RoundedRectangle(cornerRadius: DS.Radius.control)
+                                            .fill(DS.Color.selection)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, DS.Space.tight)
+
+                        switch settings.cleanupTier {
+                        case .rules:
+                            note("Deterministic and instant. No model, no network.")
+                        case .onDevice:
+                            note(FoundationModelFormatter.unavailableReason
+                                ?? "Apple's on-device model. Falls back to rules on timeout.")
+                        case .claude:
+                            secureField(
+                                "Anthropic API key",
+                                text: $apiKeyInput,
+                                prompt: "sk-ant-…"
+                            )
+                            .onChange(of: apiKeyInput) { _, newValue in
+                                APIKeyStore.saveAnthropicKey(newValue)
+                            }
+                            note("Stored in the Keychain, sent only to api.anthropic.com. "
+                                + "Falls back to rules on timeout or error.")
+                        }
+                    }
                 }
 
                 Spacer()
             }
             .padding(DS.Space.panel)
         }
-        .frame(width: 520, height: 460)
+        .frame(width: 520, height: 540)
     }
 
     private func panel<Content: View>(
@@ -84,6 +126,23 @@ struct SettingsWindow: View {
         .padding(DS.Space.roomy)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(BrushedPanel())
+    }
+
+    private func secureField(_ label: String, text: Binding<String>, prompt: String) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.tight) {
+            Silkscreen(text: label)
+            SecureField(prompt, text: text)
+                .textFieldStyle(.plain)
+                .font(DS.Font.body)
+                .foregroundStyle(DS.Color.inkOnDeck)
+                .padding(.horizontal, DS.Space.snug)
+                .padding(.vertical, DS.Space.snug)
+                .background(DS.Color.deck, in: .rect(cornerRadius: DS.Radius.chip))
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.Radius.chip)
+                        .strokeBorder(DS.Color.seam, lineWidth: DS.Border.hairline)
+                )
+        }
     }
 
     private func note(_ text: String) -> some View {

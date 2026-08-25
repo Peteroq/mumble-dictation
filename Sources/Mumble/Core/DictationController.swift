@@ -55,9 +55,11 @@ final class DictationController {
     /// Chosen per-utterance so the menu toggle applies to the very next hold.
     private var activeFormatter: any TextFormatter {
         if let formatter { return formatter }
-        return Settings.shared.smartCleanup
-            ? FoundationModelFormatter()
-            : RuleBasedFormatter()
+        switch Settings.shared.cleanupTier {
+        case .rules: return RuleBasedFormatter()
+        case .onDevice: return FoundationModelFormatter()
+        case .claude: return ClaudeFormatter()
+        }
     }
 
     private var engine: (any TranscriptionEngine)?
