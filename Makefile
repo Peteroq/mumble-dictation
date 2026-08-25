@@ -22,17 +22,51 @@ APPNAME  := Mumble.app
 BUNDLE   := $(STAGE)/$(APPNAME)
 CONTENTS := $(BUNDLE)/Contents
 
-## TCC keys the Accessibility grant to the code signature, so an ad-hoc signature — which
-## changes on every build — makes the user re-grant after every `make`. Signing with a
-## stable Developer ID keeps the identity constant and the grant sticky. Falls back to
-## ad-hoc ("-") on a machine without the cert.
-SIGN_ID := $(shell security find-identity -v -p codesigning 2>/dev/null \
-             | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
+## TCC keys the Accessibility and Microphone grants to the signature's *designated
+## requirement*, not to the app's path. An ad-hoc signature ("-") has no certificate, so its
+## requirement can only pin the cdhash — which changes on literally every build. That is why
+## the grant had to be re-issued after every `make install`: macOS saw a different app.
+##
+## Signing with any real certificate makes the requirement name the leaf certificate and the
+## bundle ID instead of the hash, and both of those survive rebuilds. It also survives a
+## certificate *renewal*, because the requirement matches the certificate's common name
+## (which carries the team ID) rather than its serial.
+##
+## Preference order:
+##   1. Developer ID Application — stable and also passes Gatekeeper if the app is ever
+##      distributed.
+##   2. Apple Development — equally stable for a locally-installed app; the usual case on a
+##      machine that has Xcode signed in.
+##   3. A self-signed identity named by LOCAL_SIGN_CN, for a machine with no Apple certs.
+##      See `make signing` for how to create one.
+## Revoked certificates are filtered out: `find-identity` still lists them, and codesign
+## refuses them with an unhelpful error.
+LOCAL_SIGN_CN := Mumble Local Signing
+
+## Selected by SHA-1 fingerprint rather than by name: a keychain routinely holds several
+## certificates sharing one common name (an expired or revoked one alongside its
+## replacement), and `codesign --sign "<name>"` fails outright with "ambiguous" when it does.
+## The fingerprint is unique, and the name is carried alongside only so the build log is
+## readable.
+SIGN_ROW := $(shell \
+	ids="$$(security find-identity -v -p codesigning 2>/dev/null | grep -v CSSMERR)"; \
+	for pattern in "Developer ID Application" "Apple Development" "$(LOCAL_SIGN_CN)"; do \
+		hit="$$(printf '%s\n' "$$ids" | grep -F "$$pattern" | head -1)"; \
+		if [ -n "$$hit" ]; then \
+			printf '%s ' "$$(printf '%s' "$$hit" | awk '{print $$2}')"; \
+			printf '%s' "$$(printf '%s' "$$hit" | sed -E 's/.*"(.*)".*/\1/')"; \
+			break; \
+		fi; \
+	done)
+
+SIGN_ID   := $(firstword $(SIGN_ROW))
+SIGN_NAME := $(wordlist 2,99,$(SIGN_ROW))
 ifeq ($(strip $(SIGN_ID)),)
-SIGN_ID := -
+SIGN_ID   := -
+SIGN_NAME := ad-hoc
 endif
 
-.PHONY: all build app run install clean icon
+.PHONY: all build app run install clean icon signing
 
 all: app
 
@@ -63,15 +97,24 @@ app: build
 		--options runtime \
 		--timestamp=none \
 		"$(BUNDLE)"
-	@echo "built $(BUNDLE)  [signed: $(SIGN_ID)]"
+	@echo "built $(BUNDLE)  [signed: $(SIGN_NAME)]"
+	@# Loud, because the failure mode is silent and annoying: an ad-hoc build installs and
+	@# runs fine, and only reveals itself when the hotkey stops working an hour later.
+	@if [ "$(SIGN_ID)" = "-" ]; then \
+		echo ""; \
+		echo "  WARNING: ad-hoc signature. macOS will drop the Accessibility and"; \
+		echo "  Microphone grants on every rebuild. Run 'make signing' for the fix."; \
+		echo ""; \
+	fi
 
 ## Only ever targets the Mumble executable — never the separate `mumble` app.
 run: app
 	@pkill -x $(EXEC) 2>/dev/null || true
 	@open "$(BUNDLE)"
 
-## Ad-hoc signatures change on every rebuild, which resets the Accessibility grant.
-## Installing to /Applications keeps the path stable and makes re-granting a one-click fix.
+## Installing to /Applications keeps the path stable, which is what the Accessibility pane
+## lists the app by. The grant itself is kept across rebuilds by the signing identity above,
+## not by this path.
 install: app
 	@pkill -x $(EXEC) 2>/dev/null || true
 	@# $(BUNDLE) is an absolute staging path — the destination must use $(APPNAME) alone.
@@ -82,3 +125,32 @@ install: app
 
 clean:
 	@rm -rf .build "$(STAGE)" "$(SCRATCH)"
+
+## Reports which identity `make app` will sign with, and why it matters. Run this first if
+## the Accessibility grant ever starts dropping again.
+signing:
+	@echo "signing identity: $(SIGN_NAME)"
+	@echo "fingerprint:      $(SIGN_ID)"
+	@if [ "$(SIGN_ID)" = "-" ]; then \
+		echo ""; \
+		echo "Ad-hoc. Every rebuild produces a new code identity, so macOS revokes the"; \
+		echo "Accessibility and Microphone grants each time. To fix it, either:"; \
+		echo ""; \
+		echo "  a) Sign in to Xcode with an Apple ID (Xcode > Settings > Accounts) so an"; \
+		echo "     'Apple Development' certificate lands in the login keychain, or"; \
+		echo "  b) Create a self-signed code-signing certificate in Keychain Access"; \
+		echo "     (Keychain Access > Certificate Assistant > Create a Certificate,"; \
+		echo "     name it '$(LOCAL_SIGN_CN)', type 'Code Signing'), then set it to"; \
+		echo "     'Always Trust' for code signing."; \
+		echo ""; \
+		echo "Then re-run 'make install' and grant Accessibility once more."; \
+	else \
+		echo ""; \
+		echo "Stable. The Accessibility grant is keyed to this certificate and the bundle"; \
+		echo "ID, so it survives rebuilds. If you switch certificates you will have to"; \
+		echo "grant access one more time."; \
+	fi
+	@echo ""
+	@echo "installed app's requirement:"
+	@codesign -d -r- "/Applications/$(APPNAME)" 2>/dev/null | sed -n 's/^designated => /  /p' \
+		|| echo "  (not installed yet)"
