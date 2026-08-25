@@ -8,6 +8,16 @@ import Foundation
 /// is the point of keeping this behind a protocol.
 protocol TextFormatter: Sendable {
     func format(_ raw: String) async -> String
+
+    /// Called when the hotkey goes *down*, so a model-backed formatter can load its assets
+    /// during the hold rather than after release. The hold is dead time we already own;
+    /// the post-release gap is the only latency the user actually feels.
+    func prewarm()
+}
+
+extension TextFormatter {
+    /// Deterministic formatters have nothing to warm.
+    func prewarm() {}
 }
 
 /// Deterministic, zero-latency cleanup. Good enough to be useful on its own and always
