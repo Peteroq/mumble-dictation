@@ -1,6 +1,6 @@
-# Murmur for Windows
+# Mumble for Windows
 
-The Windows port of Murmur — push-to-talk dictation, on-device.
+The Windows port of Mumble — push-to-talk dictation, on-device.
 
 > **Status: feature-complete, never run on real hardware.** Every layer exists and CI
 > builds, tests and publishes a working single-file executable that starts and passes its
@@ -77,24 +77,24 @@ windows/
 ├─ Directory.Packages.props       central version pinning
 ├─ global.json                    SDK pin
 ├─ src/
-│  ├─ Murmur.Dictionary/          corrections + biasing          net10.0
-│  ├─ Murmur.Abstractions/        the four platform interfaces   net10.0
-│  ├─ Murmur.Core/                engine, segmenter, storage     net10.0
-│  ├─ Murmur.Speech/              Parakeet via sherpa-onnx       net10.0
-│  ├─ Murmur.Testing/             fakes for the interfaces       net10.0
-│  ├─ Murmur.App/                 Avalonia UI                    net10.0
-│  └─ Murmur.Platform.Windows/    the ONLY Win32 code            net10.0-windows
+│  ├─ Mumble.Dictionary/          corrections + biasing          net10.0
+│  ├─ Mumble.Abstractions/        the four platform interfaces   net10.0
+│  ├─ Mumble.Core/                engine, segmenter, storage     net10.0
+│  ├─ Mumble.Speech/              Parakeet via sherpa-onnx       net10.0
+│  ├─ Mumble.Testing/             fakes for the interfaces       net10.0
+│  ├─ Mumble.App/                 Avalonia UI                    net10.0
+│  └─ Mumble.Platform.Windows/    the ONLY Win32 code            net10.0-windows
 └─ tests/
-   ├─ Murmur.Dictionary.Tests/    the shared vectors             24 tests
-   ├─ Murmur.Core.Tests/          engine, chunking, storage      26 tests
-   └─ Murmur.App.Tests/           headless Avalonia UI           13 tests
+   ├─ Mumble.Dictionary.Tests/    the shared vectors             24 tests
+   ├─ Mumble.Core.Tests/          engine, chunking, storage      26 tests
+   └─ Mumble.App.Tests/           headless Avalonia UI           13 tests
 ```
 
 **Only one project targets `-windows`.** Everything else is platform-neutral, so `CA1416`
 turns an accidental Win32 call into a build error — and, more usefully, the whole app
 builds, runs and tests on macOS.
 
-`Murmur.App` loads the platform layer **by reflection** rather than referencing it. A direct
+`Mumble.App` loads the platform layer **by reflection** rather than referencing it. A direct
 reference would drag the UI onto `net10.0-windows` and destroy the local loop. The published
 self-test verifies that reflection works from inside the single-file bundle, because that is
 where the arrangement would otherwise fail — silently, at the moment the user first pressed
@@ -112,17 +112,17 @@ projects, behind an interface.
 
 ```bash
 cd windows
-dotnet build Murmur.sln --no-incremental -warnaserror
-dotnet test  Murmur.sln
+dotnet build Mumble.sln --no-incremental -warnaserror
+dotnet test  Mumble.sln
 ```
 
-**On macOS or Linux** — use the solution filter. `Murmur.Platform.Windows` targets
+**On macOS or Linux** — use the solution filter. `Mumble.Platform.Windows` targets
 `net10.0-windows` and cannot compile off Windows; the filter omits it and everything else
 builds and tests normally, including the full UI suite:
 
 ```bash
 cd windows
-dotnet test Murmur.CrossPlatform.slnf -c Release      # ~0.5s, 63 tests
+dotnet test Mumble.CrossPlatform.slnf -c Release      # ~0.5s, 63 tests
 ```
 
 `--no-incremental` is not optional in CI. Roslyn does not re-emit analyzer warnings on an

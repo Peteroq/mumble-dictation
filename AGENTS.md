@@ -39,22 +39,22 @@ of them can be exercised by hand.
 
 ```bash
 swift test --filter VectorTests                    # macOS side
-cd windows && dotnet test Murmur.CrossPlatform.slnf # Windows side, runs anywhere
+cd windows && dotnet test Mumble.CrossPlatform.slnf # Windows side, runs anywhere
 ```
 
-The Swift copy at `Tests/MurmurDictionaryTests/dictionary-test-vectors.json` is a copy, and
+The Swift copy at `Tests/MumbleDictionaryTests/dictionary-test-vectors.json` is a copy, and
 CI fails if it drifts from `shared/`. After editing the shared file:
 
 ```bash
-cp shared/dictionary-test-vectors.json Tests/MurmurDictionaryTests/
+cp shared/dictionary-test-vectors.json Tests/MumbleDictionaryTests/
 ```
 
 ---
 
 ## Things that look like bugs and are not
 
-**`dotnet build Murmur.sln` fails on macOS** with `NETSDK1073`. Expected —
-`Murmur.Platform.Windows` targets `net10.0-windows`. Use `Murmur.CrossPlatform.slnf`, which
+**`dotnet build Mumble.sln` fails on macOS** with `NETSDK1073`. Expected —
+`Mumble.Platform.Windows` targets `net10.0-windows`. Use `Mumble.CrossPlatform.slnf`, which
 omits it; everything else, including the whole UI suite, builds and tests on macOS in about
 half a second.
 
@@ -85,7 +85,7 @@ invisible to SwiftUI's state graph. Don't "clean that up" into `@State`.
 
 ## Design system
 
-`Sources/MurmurYouTube/UI/DesignSystem.swift` defines every colour, size, radius, duration
+`Sources/Mumble/UI/DesignSystem.swift` defines every colour, size, radius, duration
 and material token. **Views must not contain literal values.** If a component needs a number
 that isn't a token, add the token rather than inlining it.
 
@@ -112,7 +112,7 @@ shows as **on** while the app is untrusted. The `Makefile` auto-detects a Develo
 If a grant does get wedged, reset that one row — never toggle, and never omit the bundle ID:
 
 ```bash
-tccutil reset Accessibility ai.pivotstudio.murmur-youtube
+tccutil reset Accessibility ai.pivotstudio.mumble
 ```
 
 A bare `tccutil reset Accessibility` wipes every app on the machine. Then quit System
@@ -147,7 +147,7 @@ key-down is swallowed and the key-up escapes, the target app believes Ctrl is he
 `ValuePattern` replaces a whole field rather than inserting at the caret. `SendInput` is the
 primary path, not a fallback.
 
-**`Murmur.App` loads the platform layer by reflection, not by reference.** A direct
+**`Mumble.App` loads the platform layer by reflection, not by reference.** A direct
 reference would force the UI onto `net10.0-windows` and you would lose the ability to run it
 on your own machine. Two consequences that have already bitten once: the assembly is
 invisible to `PublishSingleFile`, so it is published as a loose file beside the exe *and*
@@ -155,7 +155,7 @@ resolved by an explicit `AssemblyLoadContext` handler; and the published self-te
 this, because when it breaks the app starts perfectly and then does nothing at all when the
 key is pressed.
 
-**Keep `Murmur.Platform.Windows` logic-free.** Anything living there is code CI cannot
+**Keep `Mumble.Platform.Windows` logic-free.** Anything living there is code CI cannot
 exercise. Retries, debouncing and device-change handling belong in the platform-neutral
 projects behind an interface — those target plain `net10.0`, so `CA1416` turns any accidental
 Win32 call into a build error.

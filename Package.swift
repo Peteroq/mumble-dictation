@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "MurmurYouTube",
+    name: "Mumble",
     platforms: [.macOS(.v26)],
     dependencies: [
         // Parakeet TDT as CoreML on the Neural Engine. Optional at runtime — Apple's
@@ -14,25 +14,25 @@ let package = Package(
         // behaviour is a cross-platform contract: the Windows app reimplements this logic in
         // C#, and both sides run the same vectors in shared/dictionary-test-vectors.json.
         .target(
-            name: "MurmurDictionary",
-            path: "Sources/MurmurDictionary",
+            name: "MumbleDictionary",
+            path: "Sources/MumbleDictionary",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
-            name: "MurmurYouTube",
+            name: "Mumble",
             dependencies: [
-                "MurmurDictionary",
+                "MumbleDictionary",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
-            path: "Sources/MurmurYouTube",
+            path: "Sources/Mumble",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]
         ),
         .testTarget(
-            name: "MurmurDictionaryTests",
-            dependencies: ["MurmurDictionary"],
-            path: "Tests/MurmurDictionaryTests",
+            name: "MumbleDictionaryTests",
+            dependencies: ["MumbleDictionary"],
+            path: "Tests/MumbleDictionaryTests",
             resources: [.copy("dictionary-test-vectors.json")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
