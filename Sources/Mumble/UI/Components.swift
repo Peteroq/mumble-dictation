@@ -1,93 +1,54 @@
 import SwiftUI
 
-// The physical vocabulary of the app: panels, wells, keys, lamps, silkscreen, meters.
+// The visual vocabulary of the app: cards, insets, tiles, buttons, labels, meters.
 // Every value here comes from `DS`. If a component needs a number that isn't a token, the
 // token is missing — add it there rather than inlining it.
 
 // MARK: - Surfaces
 
-/// A brushed-metal panel. The grain is drawn, not an image: it stays sharp at any scale,
-/// follows the silver/black face automatically, and costs nothing to ship.
-struct BrushedPanel: View {
+/// A card: a soft white plane lifted off the ground by one diffuse shadow and bounded by a
+/// hairline. No gradient, no grain — the lift comes entirely from the shadow.
+struct Card: View {
     var radius: CGFloat = DS.Radius.panel
 
     var body: some View {
-        ZStack {
-            DS.Color.panel
-            Grain()
-        }
-        .clipShape(.rect(cornerRadius: radius))
-        .overlay(
-            RoundedRectangle(cornerRadius: radius)
-                .strokeBorder(DS.Color.panelHighlight, lineWidth: DS.Border.bevel)
-                .blendMode(.plusLighter)
-                .opacity(0.5)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: radius)
-                .strokeBorder(DS.Color.seam, lineWidth: DS.Border.seam)
-                .opacity(0.35)
-        )
-    }
-
-    /// Fine horizontal striations, the direction a rolled aluminum sheet is brushed.
-    private struct Grain: View {
-        var body: some View {
-            Canvas { context, size in
-                var y: CGFloat = 0
-                var alternate = false
-                while y < size.height {
-                    let shade = alternate ? DS.Material.grainDark : DS.Material.grainLight
-                    let color = alternate ? Color.black : Color.white
-                    context.fill(
-                        Path(CGRect(x: 0, y: y, width: size.width, height: DS.Material.grainPitch / 2)),
-                        with: .color(color.opacity(shade))
-                    )
-                    y += DS.Material.grainPitch
-                    alternate.toggle()
-                }
-            }
-            .rotationEffect(DS.Material.grainAngle)
-            .allowsHitTesting(false)
-        }
-    }
-}
-
-/// A recessed well cut into the panel. Content sits *in* it, so the inner edge is dark at
-/// the top and light at the bottom — the inverse of a raised cap.
-struct Well<Content: View>: View {
-    var radius: CGFloat = DS.Radius.panel
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .background(DS.Color.well, in: .rect(cornerRadius: radius))
+        dsShape(radius)
+            .fill(DS.Color.panel)
+            .dsShadow(DS.Shadow.panel)
             .overlay(
-                RoundedRectangle(cornerRadius: radius)
+                dsShape(radius)
                     .strokeBorder(DS.Color.seam, lineWidth: DS.Border.hairline)
-                    .opacity(0.55)
             )
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(DS.Color.panelHighlight)
-                    .frame(height: DS.Border.bevel)
-                    .opacity(0.35)
-                    .padding(.horizontal, DS.Border.bevel)
-            }
     }
 }
 
-/// The dark readout window — the tape window of a deck. Darker than a `Well`, and always
-/// dark regardless of face, because a lit readout needs something to be lit against.
-struct DeckWindow<Content: View>: View {
+/// An inset field — search boxes, typed-into wells. Sits *into* the surface, so it is a
+/// shade darker than the card with no shadow of its own.
+struct Inset<Content: View>: View {
+    var radius: CGFloat = DS.Radius.control
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .background(DS.Color.well, in: dsShape(radius))
+            .overlay(
+                dsShape(radius)
+                    .strokeBorder(DS.Color.seam, lineWidth: DS.Border.hairline)
+            )
+    }
+}
+
+/// A content tile — the plane a list or transcript sits on. A hair off `Card` so a list
+/// reads as its own surface when nested inside one.
+struct Tile<Content: View>: View {
     var radius: CGFloat = DS.Radius.panel
     @ViewBuilder var content: Content
 
     var body: some View {
         content
-            .background(DS.Color.deck, in: .rect(cornerRadius: radius))
+            .background(DS.Color.deck, in: dsShape(radius))
             .overlay(
-                RoundedRectangle(cornerRadius: radius)
+                dsShape(radius)
                     .strokeBorder(DS.Color.seam, lineWidth: DS.Border.hairline)
             )
     }
@@ -95,102 +56,57 @@ struct DeckWindow<Content: View>: View {
 
 // MARK: - Labels
 
-/// A silkscreened panel label: small, uppercase, tightly tracked.
+/// A small label — a group header, a button title, a metadata chip.
 ///
-/// The uppercasing happens here rather than at the call site so a label can never be
-/// half-styled — the look depends on all three of size, tracking and case.
-struct Silkscreen: View {
+/// Sentence case, deliberately: the previous uppercase treatment fought the rounded face and
+/// cost width, which is the one thing an airy layout can't spare.
+struct TextLabel: View {
     let text: String
     var large = false
     var color: Color = DS.Color.silkscreen
 
     var body: some View {
-        Text(text.uppercased())
+        Text(text)
             .font(large ? DS.Font.silkscreenLarge : DS.Font.silkscreen)
             .tracking(DS.Font.silkscreenTracking)
             .foregroundStyle(color)
     }
 }
 
-// MARK: - Hardware detail
+// MARK: - Status
 
-/// A panel screw. Purely decorative, and deliberately so — real equipment has fasteners,
-/// and their absence is one of the things that makes software look like software.
-struct Screw: View {
-    var body: some View {
-        Circle()
-            .fill(DS.Color.panelShade)
-            .overlay(
-                Circle().strokeBorder(DS.Color.seam.opacity(0.6), lineWidth: DS.Border.hairline)
-            )
-            .overlay(
-                Rectangle()
-                    .fill(DS.Color.seam.opacity(0.7))
-                    .frame(width: DS.Material.screwSize * 0.55, height: DS.Border.hairline)
-                    .rotationEffect(.degrees(28))
-            )
-            .overlay(alignment: .top) {
-                Circle()
-                    .fill(DS.Color.panelHighlight)
-                    .frame(height: DS.Border.bevel)
-                    .opacity(0.6)
-            }
-            .frame(width: DS.Material.screwSize, height: DS.Material.screwSize)
-    }
-}
-
-/// A run of ventilation slots.
-struct Vents: View {
-    var count = 6
-
-    var body: some View {
-        HStack(spacing: DS.Material.ventSlotGap) {
-            ForEach(0..<count, id: \.self) { _ in
-                RoundedRectangle(cornerRadius: DS.Material.ventRadius)
-                    .fill(DS.Color.seam)
-                    .frame(width: DS.Material.ventSlotWidth, height: DS.Material.ventSlotHeight)
-                    .opacity(0.5)
-            }
-        }
-    }
-}
-
-/// An indicator lamp behind a lens. Lit lamps get a specular dot, not a bloom — the brief
-/// rules out glow, and real lamps read as lit because of the highlight on the lens.
-struct Lamp: View {
+/// A status dot. Lit dots carry a soft halo of their own color; unlit ones stay visible as a
+/// dim lens so the row doesn't change height or weight when state flips.
+struct StatusDot: View {
     let color: Color
     var isLit: Bool
     var size: CGFloat = DS.Material.lampSize
 
     var body: some View {
         Circle()
-            .fill(color.opacity(isLit ? 1 : DS.Material.lampUnlitOpacity))
-            .overlay(
-                Circle().strokeBorder(DS.Color.seam.opacity(0.7), lineWidth: DS.Border.hairline)
-            )
-            .overlay(alignment: .topLeading) {
-                if isLit {
-                    Circle()
-                        .fill(.white)
-                        .opacity(DS.Material.lampSpecular)
-                        .frame(width: size * 0.3, height: size * 0.3)
-                        .offset(x: size * 0.2, y: size * 0.18)
-                }
-            }
+            .fill(isLit ? color : color.opacity(DS.Material.lampUnlitOpacity))
             .frame(width: size, height: size)
+            .shadow(
+                color: isLit ? color.opacity(0.55) : .clear,
+                radius: isLit ? DS.Material.lampHalo : 0
+            )
             .animation(DS.Motion.lamp, value: isLit)
     }
 }
 
 // MARK: - Controls
 
-/// A transport key: rectangular, chunky, with real travel. Pressed means *pressed* — the cap
-/// sinks and its shadow collapses — rather than merely tinted.
-struct TransportKey: View {
+/// A pill button. Pressing scales it down slightly rather than sinking it — at these radii a
+/// travel offset reads as a glitch, where a scale reads as touch.
+///
+/// `isProminent` is the primary action: a solid ink pill with light text, the one high-contrast
+/// element on a page of white. There should be at most one visible at a time.
+struct ActionButton: View {
     let title: String
     var systemImage: String?
     var isEngaged = false
-    var engagedColor: Color = DS.Color.record
+    var engagedColor: Color = DS.Color.accent
+    var isProminent = false
     var isEnabled = true
     let action: () -> Void
 
@@ -201,150 +117,132 @@ struct TransportKey: View {
             HStack(spacing: DS.Space.tight) {
                 if let systemImage {
                     Image(systemName: systemImage)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 11, weight: .semibold))
                 }
-                Silkscreen(text: title, color: labelColor)
+                TextLabel(text: title, color: labelColor)
             }
             .frame(minWidth: DS.Material.keyMinWidth)
             .frame(height: DS.Material.keyHeight)
             .padding(.horizontal, DS.Space.base)
             .background(cap)
+            .scaleEffect(isPressed ? DS.Material.keyPressScale : 1)
             .offset(y: isPressed ? DS.Material.keyTravel : 0)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.4)
+        .opacity(isEnabled ? 1 : 0.35)
         .onLongPressGesture(minimumDuration: 0) {} onPressingChanged: { pressing in
             withAnimation(pressing ? DS.Motion.press : DS.Motion.release) { isPressed = pressing }
         }
     }
 
     private var labelColor: Color {
-        isEngaged ? engagedColor : DS.Color.ink
+        if isProminent { return DS.Color.panel }
+        return isEngaged ? engagedColor : DS.Color.ink
+    }
+
+    private var fill: Color {
+        if isProminent { return DS.Color.ink }
+        return isEngaged ? DS.Color.selection : DS.Color.cap
+    }
+
+    private var stroke: Color {
+        if isProminent { return .clear }
+        return isEngaged ? DS.Color.selectionEdge : DS.Color.seam
     }
 
     private var cap: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: DS.Radius.control)
-                .fill(DS.Color.cap)
-            // Top bevel catches the light; bottom bevel is in shade. Swapped when pressed.
-            RoundedRectangle(cornerRadius: DS.Radius.control)
-                .strokeBorder(isPressed ? DS.Color.panelShade : DS.Color.panelHighlight,
-                              lineWidth: DS.Border.bevel)
-            RoundedRectangle(cornerRadius: DS.Radius.control)
-                .strokeBorder(DS.Color.seam.opacity(0.5), lineWidth: DS.Border.hairline)
-        }
-        .shadow(
-            color: (isPressed ? DS.Shadow.pressed : DS.Shadow.raised).color,
-            radius: (isPressed ? DS.Shadow.pressed : DS.Shadow.raised).radius,
-            x: (isPressed ? DS.Shadow.pressed : DS.Shadow.raised).x,
-            y: (isPressed ? DS.Shadow.pressed : DS.Shadow.raised).y
-        )
+        Capsule(style: .continuous)
+            .fill(fill)
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(stroke, lineWidth: DS.Border.hairline)
+            )
+            .dsShadow(isPressed ? DS.Shadow.pressed : DS.Shadow.raised)
     }
 }
 
 // MARK: - Instrumentation
 
-/// A VU meter with a real needle.
+/// A level meter drawn as a row of soft capsule bars.
 ///
-/// The needle is damped rather than driven directly from the signal: a physical VU movement
-/// takes ~300ms to reach a step and overshoots slightly before settling, and that lag is the
-/// instrument's character. Tracking the level exactly would produce a twitching line that
-/// reads as a progress bar with a stick on it.
-struct VUMeter: View {
+/// The bars are damped rather than driven straight from the signal: rise is near-instant and
+/// fall is slow, which is what makes a meter readable. Tracking the level exactly produces a
+/// strobing row that reads as noise.
+struct LevelMeter: View {
     /// Current input level, 0...1.
     let level: Float
     var isActive: Bool
 
-    /// The needle's physical state lives in a plain reference type, deliberately *not* in
-    /// `@State`. The movement has to advance once per drawn frame, and SwiftUI state mutated
-    /// inside a `Canvas` draw closure is a mutation during view update — which SwiftUI logs
-    /// as undefined behavior and which, at 120fps, floods the process. A reference the view
-    /// merely holds is invisible to the state graph, so stepping it is safe.
-    @State private var movement = NeedleMovement()
+    /// The bar state lives in a plain reference type, deliberately *not* in `@State`. It has
+    /// to advance once per drawn frame, and SwiftUI state mutated inside a `Canvas` draw
+    /// closure is a mutation during view update — which SwiftUI logs as undefined behavior
+    /// and which, at 120fps, floods the process. A reference the view merely holds is
+    /// invisible to the state graph, so stepping it is safe.
+    @State private var movement = Movement()
 
-    private final class NeedleMovement {
-        var position: Double = 0
-        var velocity: Double = 0
+    private final class Movement {
+        var bars: [Double] = []
     }
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.animation) { _ in
             Canvas { context, size in
-                draw(in: &context, size: size, at: timeline.date)
+                draw(in: &context, size: size)
             }
         }
-        .background(DS.Color.meterFace)
-        .overlay(
-            Rectangle()
-                .fill(DS.Color.meterLamp)
-                .opacity(isActive ? 0.14 : 0)
-                .animation(DS.Motion.lamp, value: isActive)
-        )
-        .clipShape(.rect(cornerRadius: DS.Radius.chip))
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.chip)
-                .strokeBorder(DS.Color.seam, lineWidth: DS.Border.hairline)
-        )
+        .opacity(isActive ? 1 : 0.45)
+        .animation(DS.Motion.lamp, value: isActive)
     }
 
-    private func draw(in context: inout GraphicsContext, size: CGSize, at date: Date) {
-        advanceNeedle()
+    private func draw(in context: inout GraphicsContext, size: CGSize) {
+        let pitch = DS.Material.barWidth + DS.Material.barGap
+        let count = max(1, Int(size.width / pitch))
+        advance(count: count)
 
-        let pivot = CGPoint(x: size.width / 2, y: size.height * 1.05)
-        let radius = min(size.width * 0.46, size.height * 0.92)
-        let sweep = DS.Material.needleSweep.radians
+        // Left-to-right inset so the row of bars stays centered in whatever width it's given.
+        let used = CGFloat(count) * pitch - DS.Material.barGap
+        let originX = (size.width - used) / 2
 
-        // Scale arc, with the red zone past 0 VU.
-        for tick in stride(from: 0.0, through: 1.0, by: 0.1) {
-            let angle = -sweep / 2 + sweep * tick
-            let isOver = tick >= DS.Material.meterZeroPoint
-            let inner = radius * (tick.truncatingRemainder(dividingBy: 0.2) < 0.01 ? 0.78 : 0.86)
-            var path = Path()
-            path.move(to: point(from: pivot, angle: angle, distance: inner))
-            path.addLine(to: point(from: pivot, angle: angle, distance: radius))
-            context.stroke(
-                path,
-                with: .color(isOver ? DS.Color.meterRed : DS.Color.meterNeedle),
-                lineWidth: DS.Border.hairline
+        for index in 0..<count {
+            let value = movement.bars[index]
+            let height = max(DS.Material.barMinHeight, CGFloat(value) * size.height)
+            let x = originX + CGFloat(index) * pitch
+            let rect = CGRect(
+                x: x,
+                y: (size.height - height) / 2,
+                width: DS.Material.barWidth,
+                height: height
+            )
+            let isHot = value >= DS.Material.meterZeroPoint
+            context.fill(
+                Path(roundedRect: rect, cornerRadius: DS.Material.barWidth / 2),
+                with: .color(isHot ? DS.Color.meterRed : DS.Color.meterLamp)
             )
         }
-
-        // Needle.
-        let angle = -sweep / 2 + sweep * movement.position
-        var needlePath = Path()
-        needlePath.move(to: pivot)
-        needlePath.addLine(to: point(from: pivot, angle: angle, distance: radius * 0.98))
-        context.stroke(
-            needlePath,
-            with: .color(DS.Color.meterNeedle),
-            lineWidth: DS.Material.needleWidth
-        )
     }
 
-    /// Critically-damped-ish spring toward the target, tuned to VU ballistics.
-    private func advanceNeedle() {
+    /// Advances every bar toward the current level, with each bar lagging the one before it.
+    /// The offset is what turns a flat row into a travelling ripple.
+    private func advance(count: Int) {
+        if movement.bars.count != count {
+            movement.bars = Array(repeating: 0, count: count)
+        }
         let target = Double(min(max(level, 0), 1))
-        let rising = target > movement.position
-        let time = rising ? DS.Motion.needleAttack : DS.Motion.needleRelease
-        // Frame-rate independent enough at 60–120Hz, and a meter is forgiving of the rest.
-        let stiffness = 1 / time
-        let delta = target - movement.position
-        movement.velocity += delta * stiffness * 0.16
-        movement.velocity *= 0.72
-        movement.position += movement.velocity
-        movement.position = min(max(movement.position, 0), 1 + DS.Motion.needleOvershoot)
-    }
-
-    private func point(from origin: CGPoint, angle: Double, distance: CGFloat) -> CGPoint {
-        CGPoint(
-            x: origin.x + sin(angle) * distance,
-            y: origin.y - cos(angle) * distance
-        )
+        for index in 0..<count {
+            // Bars away from center peak slightly lower, so the row reads as a waveform
+            // rather than a block.
+            let distance = abs(Double(index) - Double(count - 1) / 2) / Double(max(count, 2))
+            let scaled = target * (1 - distance * 0.55)
+            let current = movement.bars[index]
+            let time = scaled > current ? DS.Motion.needleAttack : DS.Motion.needleRelease
+            let step = min(1, 1 / (time * 60))
+            movement.bars[index] = current + (scaled - current) * step
+        }
     }
 }
 
-/// A monospaced readout on a dark window — the tape counter.
+/// A monospaced readout — elapsed time, counts.
 struct Readout: View {
     let text: String
     var large = false
