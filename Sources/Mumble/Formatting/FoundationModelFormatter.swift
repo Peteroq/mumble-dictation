@@ -17,8 +17,26 @@ struct FoundationModelFormatter: TextFormatter {
     /// Deterministic fallback used on timeout, unavailability, or a rejected response.
     private let fallback = RuleBasedFormatter()
 
+    /// Built at init and warmed by `prewarm()`, because a cold session is the single
+    /// largest cost in the whole post-release path — measured at ~2.6s cold versus ~1.0s
+    /// warm on an M-series Mac. One session per utterance, never shared across them: a
+    /// reused session accumulates every prior turn in its transcript and eventually
+    /// throws `exceededContextWindowSize`.
+    private let session: LanguageModelSession
+
     /// Past this, taking the raw text beats making the user wait.
     private let timeout: Duration = .seconds(4)
+
+    init() {
+        session = LanguageModelSession(instructions: CleanupGuard.instructions)
+    }
+
+    /// Loads model assets and primes the instructions while the user is still speaking.
+    /// Returns immediately; the work happens in the background.
+    func prewarm() {
+        guard Self.isAvailable else { return }
+        session.prewarm()
+    }
 
     static var isAvailable: Bool {
         SystemLanguageModel.default.availability == .available
@@ -51,7 +69,8 @@ struct FoundationModelFormatter: TextFormatter {
 
         do {
             let cleaned = try await withThrowingTaskGroup(of: String.self) { group in
-                group.addTask { try await Self.clean(trimmed) }
+                let session = session
+                group.addTask { try await Self.clean(trimmed, using: session) }
                 group.addTask {
                     try await Task.sleep(for: timeout)
                     throw CleanupError.timedOut
@@ -96,9 +115,7 @@ struct FoundationModelFormatter: TextFormatter {
         }
     }
 
-    private static func clean(_ text: String) async throws -> String {
-        let session = LanguageModelSession(instructions: CleanupGuard.instructions)
-
+    private static func clean(_ text: String, using session: LanguageModelSession) async throws -> String {
         let response = try await session.respond(
             to: "Clean up this transcript:\n\n\(text)",
             options: GenerationOptions(

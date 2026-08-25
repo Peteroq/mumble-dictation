@@ -53,7 +53,7 @@ final class DictationController {
     private let formatter: (any TextFormatter)?
 
     /// Chosen per-utterance so the menu toggle applies to the very next hold.
-    private var activeFormatter: any TextFormatter {
+    private func makeFormatter() -> any TextFormatter {
         if let formatter { return formatter }
         switch Settings.shared.cleanupTier {
         case .rules: return RuleBasedFormatter()
@@ -61,6 +61,11 @@ final class DictationController {
         case .claude: return ClaudeFormatter()
         }
     }
+
+    /// Built at key-down and held for the whole utterance so the instance we prewarmed is
+    /// the same one that formats. Rebuilding it at release would throw away the warm
+    /// session and put the cold-start back in the path the user waits on.
+    private var utteranceFormatter: (any TextFormatter)?
 
     private var engine: (any TranscriptionEngine)?
     private var consumeTask: Task<Void, Never>?
@@ -138,6 +143,13 @@ final class DictationController {
         isComparing = Settings.shared.compareMode
         recorded.removeAll(keepingCapacity: true)
         engineName = isComparing ? "Comparing…" : Settings.shared.engine.displayName
+
+        // Warm the cleanup model now, against the hold. A model-backed formatter costs
+        // ~2.6s cold and ~1.0s warm, and every millisecond of that is currently spent
+        // after the key comes up, where it is the only delay the user can feel.
+        let formatter = makeFormatter()
+        utteranceFormatter = formatter
+        formatter.prewarm()
 
         Task { @MainActor in
             do {
@@ -243,6 +255,7 @@ final class DictationController {
             engine = nil
 
             if isComparing {
+                utteranceFormatter = nil
                 await runComparison()
                 return
             }
@@ -251,11 +264,12 @@ final class DictationController {
             guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 state = .idle
                 transcript = ""
+                utteranceFormatter = nil
                 return
             }
 
             let cleaned = Settings.shared.cleanupEnabled
-                ? await activeFormatter.format(raw)
+                ? await (utteranceFormatter ?? makeFormatter()).format(raw)
                 : raw
 
             // The dictionary runs last, and runs regardless of the cleanup setting. Biasing
@@ -272,10 +286,12 @@ final class DictationController {
 
             state = .idle
             transcript = ""
+            utteranceFormatter = nil
         }
     }
 
     private func cancelDictation() {
+        utteranceFormatter = nil
         capture.stop()
         audioContinuation?.finish()
         audioContinuation = nil
@@ -294,6 +310,7 @@ final class DictationController {
     }
 
     private func teardown() async {
+        utteranceFormatter = nil
         capture.stop()
         audioContinuation?.finish()
         audioContinuation = nil
@@ -417,6 +434,7 @@ final class DictationController {
     }
 
     private func fail(_ message: String) {
+        utteranceFormatter = nil
         Log.app.error("\(message)")
         capture.stop()
         audioContinuation?.finish()
