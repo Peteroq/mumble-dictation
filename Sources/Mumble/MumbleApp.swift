@@ -213,7 +213,10 @@ private struct MenuContent: View {
             Picker("Cleanup tier", selection: $settings.cleanupTier) {
                 ForEach(CleanupTier.allCases, id: \.self) { tier in
                     Text(tier.displayName).tag(tier)
-                        .disabled(tier.unavailableReason != nil)
+                        // Only on-device is disabled when unavailable — Claude has no
+                        // in-menu way to add a key, so it must stay selectable; pick it
+                        // here, then paste the key in Settings.
+                        .disabled(tier == .onDevice && FoundationModelFormatter.unavailableReason != nil)
                 }
             }
             if let reason = settings.cleanupTier.unavailableReason {
