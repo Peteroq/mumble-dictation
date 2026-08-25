@@ -92,10 +92,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.app.info("Mumble ready — hold \(Settings.shared.pushToTalkKey.displayName) to dictate")
     }
 
-    /// `mumbleyt://clear` and `mumbleyt://show`, used by the legacy HTML dashboard and
-    /// as a scriptable way to raise the window.
+    /// `mumble-dictation://clear` and `mumble-dictation://show`, used by the legacy HTML
+    /// dashboard and as a scriptable way to raise the window. Not bare "mumble" — that scheme
+    /// belongs to the open-source Mumble VoIP client.
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.scheme == "mumbleyt" {
+        for url in urls where url.scheme == "mumble-dictation" {
             switch url.host {
             case "clear":
                 RunLog.clear()

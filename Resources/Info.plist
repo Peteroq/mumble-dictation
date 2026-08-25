@@ -31,7 +31,9 @@
 			<string>ai.pivotstudio.mumble</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>mumbleyt</string>
+				<!-- Not bare "mumble" — the open-source Mumble VoIP client already owns the
+				     mumble:// scheme, and a collision there would hijack its links or vice versa. -->
+				<string>mumble-dictation</string>
 			</array>
 		</dict>
 	</array>

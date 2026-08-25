@@ -100,7 +100,7 @@ enum DashboardHTML {
         <h1>Engine comparison</h1>
         <div class="bar">
           <div class="sub"><span class="dot"></span>live — reloads every 3s · \(runs.count) dictation\(runs.count == 1 ? "" : "s") recorded</div>
-          \(runs.isEmpty ? "" : "<a class=\"btn\" href=\"mumbleyt://clear\">Clear results</a>")
+          \(runs.isEmpty ? "" : "<a class=\"btn\" href=\"mumble-dictation://clear\">Clear results</a>")
         </div>
         \(body)
         <footer>
