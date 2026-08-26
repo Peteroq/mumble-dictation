@@ -52,7 +52,7 @@ enum Brand {
 enum HUDMetrics {
     /// How far up the screen the band reaches. Generous, because the gradient needs room to
     /// fade out; a short band ends in a visible horizontal edge.
-    static let bandHeight: CGFloat = 440
+    static let bandHeight: CGFloat = 560
 
     /// The orb's render surface — larger than the orb itself.
     ///
@@ -74,7 +74,7 @@ enum HUDMetrics {
     /// Halfway across, not at the leading edge. Starting at zero put the first words inside
     /// the dissolve, so a short transcript was read through the fade it is supposed to
     /// disappear into — the effect is for text on its way out, not on its way in.
-    static let transcriptStart: CGFloat = transcriptWidth * 0.5
+    static let transcriptStart: CGFloat = transcriptWidth * 0.3
 
     /// Negative, and that is not a hack: the orb's render surface carries about 32pt of
     /// transparent margin on each side so its halo has room to fade, and that margin is dead
@@ -150,15 +150,18 @@ private struct Backdrop: View {
             // its radius is not adjustable — so the progression comes from fading the glass
             // itself along the falloff rather than from varying a radius. What reaches the eye
             // is blur that is absent at the top of the band and full-strength at the bottom.
-            // Untinted: the shade below is what darkens, and tinting here as well would double
-            // it in exactly the region that is already densest.
+            //
+            // `.regular` rather than `.clear`: clear glass is mostly refraction with very
+            // little frost, which is the wrong half of the effect when the shade above it is
+            // being lightened. Untinted either way — the shade is what darkens, and tinting
+            // here as well would double it in exactly the region that is already densest.
             Rectangle()
                 .fill(.clear)
-                .glassEffect(.clear, in: Rectangle())
+                .glassEffect(.regular, in: Rectangle())
                 .mask(falloff)
 
             Rectangle()
-                .fill(Brand.scrim)
+                .fill(Brand.scrim.opacity(0.62))
                 .mask(falloff)
 
             RadialGradient(
@@ -171,7 +174,7 @@ private struct Backdrop: View {
                 // the glow is on screen and its centre never shows as a bright spot.
                 center: UnitPoint(x: 0.5, y: 1.35),
                 startRadius: 0,
-                endRadius: 560
+                endRadius: 700
             )
             // Additive, so the glow lifts the scrim instead of laying a pink film over it.
             .blendMode(.plusLighter)
@@ -215,7 +218,7 @@ private struct Backdrop: View {
             ],
             center: UnitPoint(x: 0.5, y: 1.04),
             startRadiusFraction: 0,
-            endRadiusFraction: 0.6
+            endRadiusFraction: 0.74
         )
     }
 }
