@@ -64,33 +64,32 @@ final class AudioCapture: @unchecked Sendable {
 
     // MARK: - Device binding
 
-    /// Points the input node at the current system default and installs the tap.
+    /// Installs the tap for the current input device.
     ///
-    /// Re-pinning on every start is the whole reason AirPods work without a relaunch:
-    /// `AVAudioEngine` binds its input node to whichever device was default the first time
-    /// the node was pulled and never re-checks it afterwards. The device must be set before
-    /// the native format is read — the format belongs to the device, so reading it first
-    /// would build the converter for the mic we are about to stop using.
+    /// Deliberately does **not** call `setDeviceID` on the input node. On macOS 26 the node
+    /// is already routed through the system's default-device aggregate, which tracks the
+    /// default input on its own — the AUHAL log shows it moving off the built-in mic the
+    /// instant AirPods connect, with no help from us. Forcing the node onto the raw
+    /// Bluetooth device instead knocks it off that aggregate and triggers a format
+    /// renegotiation, and `installTap` then fails outright with "config change pending",
+    /// which is a microphone that captures precisely nothing.
     @discardableResult
     private func bindTap(outputFormat: AVAudioFormat) throws -> AudioInputDevice? {
         let input = engine.inputNode
         let device = AudioInputDevice.systemDefault
 
-        // Before the device swap, not after: on a rebind the old tap is still installed and
-        // still bound to the device we are about to pull out from under it.
+        // Before anything else: on a rebind the old tap is still installed and still bound
+        // to hardware that may have just gone away.
         input.removeTap(onBus: 0)
 
-        if let device {
-            do {
-                try input.auAudioUnit.setDeviceID(device.id)
-            } catch {
-                // Not fatal: the node keeps whatever device it already had, which is very
-                // likely the right one anyway. Worth saying out loud rather than swallowing.
-                Log.audio.error("could not pin input to \(device.name, privacy: .public): \(error.localizedDescription)")
-            }
+        let nativeFormat = input.outputFormat(forBus: 0)
+        // A device mid-renegotiation reports a zero-rate format, and a tap installed against
+        // one is silently never created. Better to fail loudly here — `rebind` retries, and
+        // a genuine failure reaches the user as a message instead of a dead meter.
+        guard nativeFormat.sampleRate > 0, nativeFormat.channelCount > 0 else {
+            throw TranscriptionError.noAudioFormat
         }
 
-        let nativeFormat = input.outputFormat(forBus: 0)
         converter = nativeFormat == outputFormat
             ? nil
             : AVAudioConverter(from: nativeFormat, to: outputFormat)
@@ -129,8 +128,12 @@ final class AudioCapture: @unchecked Sendable {
             engine.prepare()
             try engine.start()
         } catch {
+            // Not fatal, and specifically not `isRunning = false`: a Bluetooth device emits
+            // several configuration changes back to back while it settles, and the early
+            // ones legitimately fail. Staying "running" is what lets the next notification
+            // rebind successfully; if none ever does, the controller's liveness timeout is
+            // what turns the silence into a message.
             Log.audio.error("rebind failed: \(error.localizedDescription)")
-            isRunning = false
         }
     }
 

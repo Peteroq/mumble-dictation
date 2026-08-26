@@ -19,6 +19,9 @@ actor AppleSpeechEngine: TranscriptionEngine {
     /// but discarded as soon as a final result covering the same range arrives.
     private var finalizedText = ""
 
+    /// Whether any audio at all reached the analyzer this session.
+    private var hasFedAudio = false
+
     init(locale: Locale = Locale.current) {
         self.locale = locale
     }
@@ -62,6 +65,7 @@ actor AppleSpeechEngine: TranscriptionEngine {
         }
 
         finalizedText = ""
+        hasFedAudio = false
 
         let (chunks, chunkContinuation) = AsyncThrowingStream<TranscriptionChunk, Error>.makeStream()
 
@@ -89,6 +93,7 @@ actor AppleSpeechEngine: TranscriptionEngine {
     }
 
     func feed(_ chunk: AudioChunk) async {
+        hasFedAudio = true
         inputContinuation?.yield(AnalyzerInput(buffer: chunk.buffer))
     }
 
@@ -96,10 +101,19 @@ actor AppleSpeechEngine: TranscriptionEngine {
         inputContinuation?.finish()
         inputContinuation = nil
 
-        do {
-            try await analyzer?.finalizeAndFinishThroughEndOfInput()
-        } catch {
-            Log.speech.error("finalize failed: \(error.localizedDescription)")
+        if hasFedAudio {
+            do {
+                try await analyzer?.finalizeAndFinishThroughEndOfInput()
+            } catch {
+                Log.speech.error("finalize failed: \(error.localizedDescription)")
+                await analyzer?.cancelAndFinishNow()
+            }
+        } else {
+            // `finalizeAndFinishThroughEndOfInput` waits for the analyzer to work through
+            // its input; handed a session that never received a single buffer it waits
+            // forever, and the whole app strands in "Transcribing…" with no way out. A
+            // session with no audio has nothing to finalize, so tear it down directly.
+            Log.speech.info("no audio reached the analyzer — cancelling instead of finalizing")
             await analyzer?.cancelAndFinishNow()
         }
 

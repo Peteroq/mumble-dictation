@@ -346,8 +346,11 @@ final class DictationController {
             recorded = await feedTask?.value ?? []
             feedTask = nil
 
-            await engine?.finish()
-            await consumeTask?.value
+            // Bounded, because these two awaits are the only thing standing between a
+            // wedged engine and a HUD stuck on "Transcribing…" that nothing but quitting
+            // the app can clear.
+            await bounded(6, "engine finish") { [engine] in await engine?.finish() }
+            await bounded(3, "transcript drain") { [consumeTask] in await consumeTask?.value }
             consumeTask = nil
             engine = nil
 
@@ -525,6 +528,60 @@ final class DictationController {
         )
         self.holdStarted = nil
         self.releasedAt = nil
+    }
+
+    /// Runs `work`, giving up after `seconds` and carrying on without it.
+    ///
+    /// A backstop, not a design — every engine is supposed to return from `finish()`. It
+    /// exists because one of them didn't: handed a session that never received a single
+    /// audio buffer, `SpeechAnalyzer.finalizeAndFinishThroughEndOfInput()` waits forever,
+    /// and the whole app strands mid-utterance. That specific case is fixed at the source,
+    /// but the cost of being wrong here is the user losing the app entirely, which is far
+    /// too high to leave resting on a framework's liveness.
+    ///
+    /// On timeout the work is **abandoned**, not cancelled. Cancelling would not help — the
+    /// hang is inside a framework call that never checks for it — and awaiting the task to
+    /// observe the cancellation is precisely the thing that cannot be done here. A leaked
+    /// task that eventually returns into nothing is the cheap outcome.
+    @discardableResult
+    private func bounded(
+        _ seconds: Double,
+        _ label: String,
+        _ work: @escaping @Sendable () async -> Void
+    ) async -> Bool {
+        let completed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let once = ResumeOnce(continuation)
+            Task.detached(priority: .userInitiated) {
+                await work()
+                once.resume(completed: true)
+            }
+            Task.detached {
+                try? await Task.sleep(for: .seconds(seconds))
+                once.resume(completed: false)
+            }
+        }
+        if !completed {
+            Log.speech.error("\(label, privacy: .public) timed out after \(seconds)s — abandoned")
+        }
+        return completed
+    }
+
+    /// Resumes a continuation exactly once, whichever racer gets there first.
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Bool, Never>?
+
+        init(_ continuation: CheckedContinuation<Bool, Never>) {
+            self.continuation = continuation
+        }
+
+        func resume(completed: Bool) {
+            lock.lock()
+            let pending = continuation
+            continuation = nil
+            lock.unlock()
+            pending?.resume(returning: completed)
+        }
     }
 
     /// Light smoothing so the waveform glides instead of strobing at buffer rate.
