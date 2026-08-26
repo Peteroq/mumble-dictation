@@ -106,6 +106,12 @@ struct HUDView: View {
                 )
             }
             .padding(.bottom, HUDMetrics.contentInset)
+            // The window carries the band in; this carries the content, a shade behind it and
+            // with a little overshoot. Staggering the two is what stops the whole thing
+            // reading as one flat slab sliding about.
+            .scaleEffect(controller.state.isActive ? 1 : 0.9, anchor: .bottom)
+            .opacity(controller.state.isActive ? 1 : 0)
+            .animation(.spring(response: 0.46, dampingFraction: 0.74), value: controller.state.isActive)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         // The panel already ignores mouse events; this keeps SwiftUI from bothering to build

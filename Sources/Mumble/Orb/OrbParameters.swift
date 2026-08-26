@@ -19,6 +19,15 @@ enum OrbParameters {
     /// How much the whole orb swells at full voice, on top of the displacement.
     static let pulse: Float = 0.16
 
+    /// Per-particle scatter at full voice. Points break out of the lattice individually
+    /// instead of the shell deforming as one surface. Zero at silence, so a calm orb is still
+    /// a clean grid.
+    static let chaos: Float = 0.11
+
+    /// How much faster the noise field churns at full voice. Amplitude alone makes a louder
+    /// orb a bigger one; rate is what makes it an agitated one.
+    static let turbulence: Float = 1.9
+
     /// The slice of the level range that speech actually occupies, expanded to fill the orb's
     /// whole response. `AudioCapture` maps roughly -50...0 dBFS onto 0...1, and ordinary speech
     /// sits between about -42 and -22 of that — so without this the orb spends its life in the

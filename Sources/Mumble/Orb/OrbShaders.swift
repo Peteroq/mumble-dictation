@@ -37,6 +37,8 @@ enum OrbShaders {
         float cameraZ;
         float contentScale;
         float pulse;
+        float chaos;
+        float turbulence;
         float levelFloor;
         float levelCeiling;
         int octaves;
@@ -159,8 +161,20 @@ enum OrbShaders {
         float excited = smoothstep(u.levelFloor, u.levelCeiling, clamp(u.level, 0.0, 1.0));
 
         float drive = mix(1.0 - u.reactivity, 1.0, excited);
-        float n = fbm(p * u.noiseScale + float3(0.0, 0.0, u.time * u.flow), u.octaves);
+
+        // The churn speeds up with the voice as well as deepening. Amplitude alone makes a
+        // louder orb a bigger orb; rate is what makes it an agitated one.
+        float churn = u.flow * (1.0 + u.turbulence * excited);
+        float n = fbm(p * u.noiseScale + float3(0.0, 0.0, u.time * churn), u.octaves);
         float disp = n * u.amplitude * drive;
+
+        // High frequency, and offset per particle rather than sampled from position alone.
+        // The fbm above moves the shell as one coherent surface, so every point near a
+        // neighbour goes the same way; this is what lets individual points break ranks. Silent
+        // it contributes nothing, so the calm orb stays a clean lattice.
+        float scatter = snoise(p * u.noiseScale * 5.0
+                               + float3(seeds[vid] * 41.0, u.time * churn * 2.5, 0.0));
+        disp += scatter * u.chaos * excited;
 
         // Loudness swells the whole form as well as roughening it. Displacement alone changes
         // the silhouette without changing its size, which at this scale is easy to miss.
