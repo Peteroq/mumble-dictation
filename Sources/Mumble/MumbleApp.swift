@@ -132,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                if self.controller.state.isActive {
+                if self.controller.state.showsHUD {
                     self.hud?.present()
                 } else {
                     self.hud?.dismiss()
