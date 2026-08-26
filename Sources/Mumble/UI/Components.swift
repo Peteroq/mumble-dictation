@@ -107,6 +107,9 @@ struct ActionButton: View {
     var isEngaged = false
     var engagedColor: Color = DS.Color.accent
     var isProminent = false
+    /// Tints the icon independently of the label, so a prominent button can carry its state
+    /// in the glyph while the pill itself stays at full contrast.
+    var iconColor: Color?
     var isEnabled = true
     let action: () -> Void
 
@@ -118,6 +121,10 @@ struct ActionButton: View {
                 if let systemImage {
                     Image(systemName: systemImage)
                         .font(.system(size: 11, weight: .semibold))
+                        // Explicit, because an Image left unstyled inherits the environment's
+                        // primary label colour rather than the button's — which on a solid
+                        // ink pill meant a black glyph on a black fill.
+                        .foregroundStyle(iconColor ?? labelColor)
                 }
                 TextLabel(text: title, color: labelColor)
             }
@@ -137,7 +144,7 @@ struct ActionButton: View {
     }
 
     private var labelColor: Color {
-        if isProminent { return DS.Color.panel }
+        if isProminent { return DS.Color.onInk }
         return isEngaged ? engagedColor : DS.Color.ink
     }
 
