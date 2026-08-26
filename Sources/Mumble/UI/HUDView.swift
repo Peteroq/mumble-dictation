@@ -52,7 +52,7 @@ enum Brand {
 enum HUDMetrics {
     /// How far up the screen the band reaches. Generous, because the gradient needs room to
     /// fade out; a short band ends in a visible horizontal edge.
-    static let bandHeight: CGFloat = 340
+    static let bandHeight: CGFloat = 440
 
     /// The orb's render surface — larger than the orb itself.
     ///
@@ -64,10 +64,17 @@ enum HUDMetrics {
 
     /// The transcript's viewport. The line runs at its natural width behind this and is
     /// scrolled, so this is how much of it you see rather than where it wraps.
-    static let transcriptWidth: CGFloat = 620
+    static let transcriptWidth: CGFloat = 460
 
     /// Fraction of the viewport the leading dissolve covers, measured from the orb.
-    static let transcriptFade: CGFloat = 0.22
+    static let transcriptFade: CGFloat = 0.24
+
+    /// Where the caret sits before there is enough text to start scrolling.
+    ///
+    /// Halfway across, not at the leading edge. Starting at zero put the first words inside
+    /// the dissolve, so a short transcript was read through the fade it is supposed to
+    /// disappear into — the effect is for text on its way out, not on its way in.
+    static let transcriptStart: CGFloat = transcriptWidth * 0.5
 
     static let contentSpacing: CGFloat = 0
 
@@ -125,19 +132,25 @@ struct HUDView: View {
 
 /// The band of light and shade the orb and transcript sit on.
 ///
-/// Two gradients, not one. The linear pass is the legibility floor — it has to be dense enough
-/// under the text to hold white type over an arbitrary desktop. The radial pass is the light,
-/// and it is centred slightly below the bottom edge so what reaches the screen is the top of a
-/// much larger glow rather than a circle with a visible middle.
+/// Two gradients doing different jobs. The linear pass is the legibility floor — it has to be
+/// dense enough under the text to hold white type over an arbitrary desktop. The radial pass
+/// is the light, centred below the bottom edge so what reaches the screen is the top of a much
+/// larger glow rather than a circle with a visible middle.
+///
+/// The whole thing is then masked to nothing at the top. Both gradients otherwise reach the
+/// panel's upper edge still carrying value — the radial in particular, whose radius is far
+/// larger than the band is tall — and the panel clips there, leaving a hard horizontal line
+/// across the screen. Masking the composite means no future change to either gradient can
+/// reintroduce that edge.
 private struct Backdrop: View {
     var body: some View {
         ZStack {
             LinearGradient(
                 stops: [
                     .init(color: Brand.scrim.opacity(0), location: 0),
-                    .init(color: Brand.scrim.opacity(0.16), location: 0.34),
-                    .init(color: Brand.scrim.opacity(0.62), location: 0.68),
-                    .init(color: Brand.scrim.opacity(0.9), location: 1),
+                    .init(color: Brand.scrim.opacity(0.18), location: 0.42),
+                    .init(color: Brand.scrim.opacity(0.72), location: 0.74),
+                    .init(color: Brand.scrim.opacity(0.97), location: 1),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -145,19 +158,33 @@ private struct Backdrop: View {
 
             RadialGradient(
                 stops: [
-                    .init(color: Brand.glow.opacity(0.20), location: 0),
-                    .init(color: Brand.glow.opacity(0.07), location: 0.45),
+                    .init(color: Brand.glow.opacity(0.17), location: 0),
+                    .init(color: Brand.glow.opacity(0.06), location: 0.4),
                     .init(color: Brand.glow.opacity(0), location: 1),
                 ],
-                center: UnitPoint(x: 0.5, y: 1.12),
+                // Sunk further below the edge than the band is tall, so only the very top of
+                // the glow is on screen and its centre never shows as a bright spot.
+                center: UnitPoint(x: 0.5, y: 1.35),
                 startRadius: 0,
-                endRadius: 620
+                endRadius: 560
             )
             // Additive, so the glow lifts the scrim instead of laying a pink film over it.
             .blendMode(.plusLighter)
         }
         // Without this the blend mode would reach past the backdrop and tint the desktop.
         .compositingGroup()
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0), location: 0),
+                    .init(color: .black.opacity(0.5), location: 0.3),
+                    .init(color: .black, location: 0.58),
+                    .init(color: .black, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
         .ignoresSafeArea()
     }
 }
@@ -274,8 +301,11 @@ private struct StreamingText: View {
         return String(shown.suffix(Self.window))
     }
 
+    /// Where the line sits. One expression covering three cases: a short transcript starts
+    /// halfway across, a growing one walks left as it fills the viewport, and a long one keeps
+    /// scrolling with the caret pinned at the trailing edge.
     private var scrollOffset: CGFloat {
-        min(0, HUDMetrics.transcriptWidth - textWidth)
+        min(HUDMetrics.transcriptStart, HUDMetrics.transcriptWidth - textWidth)
     }
 
     /// Opaque everywhere but the leading edge, where the line dissolves as it travels toward
@@ -312,7 +342,7 @@ private struct Cursor: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 1, style: .continuous)
             .fill(color)
-            .frame(width: 2, height: 21)
+            .frame(width: 2, height: 25)
             .opacity(dim ? 0.05 : 1)
             .onChange(of: isActive, initial: true) { _, active in
                 guard active else {
