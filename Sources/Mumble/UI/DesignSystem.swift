@@ -66,6 +66,11 @@ enum DS {
         /// Text and glyphs sitting on a solid `accent` fill.
         static let onAccent = face(light: 0x0B0F08, dark: 0x0B0F08)
 
+        /// Text and glyphs sitting on a solid `ink` fill — the primary button. Not `panel`:
+        /// `panel` is a surface value that happens to be white today, and reusing it here
+        /// silently couples the button's legibility to a card's background.
+        static let onInk = face(light: 0xFFFFFF, dark: 0x0B0F08)
+
         /// The recording indicator. Same accent — one live color in the app.
         static let record = accent
         /// The indicator when idle: a dim lens, not an absence.

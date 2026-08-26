@@ -10,7 +10,7 @@ import SwiftUI
 final class HUDPanel: NSPanel {
     init(controller: DictationController) {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 76),
+            contentRect: NSRect(origin: .zero, size: HUDMetrics.panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -35,6 +35,10 @@ final class HUDPanel: NSPanel {
 
     /// Parks the panel just above the Dock, horizontally centered on the active screen.
     ///
+    /// The panel is larger than the capsule by `HUDMetrics.shadowMargin` on every side, so
+    /// the margin is subtracted back out here — otherwise the transparent border, not the
+    /// capsule, would be what sits 96pt above the Dock.
+    ///
     /// `NSScreen.main` is the screen with the *key window* — and an accessory app with a
     /// non-activating panel never has one, so it can be nil. Falling back to `screens.first`
     /// keeps the HUD on-screen instead of stranding it at the origin.
@@ -48,7 +52,7 @@ final class HUDPanel: NSPanel {
         setFrameOrigin(
             NSPoint(
                 x: visible.midX - size.width / 2,
-                y: visible.minY + 96
+                y: visible.minY + 96 - HUDMetrics.shadowMargin
             )
         )
     }
