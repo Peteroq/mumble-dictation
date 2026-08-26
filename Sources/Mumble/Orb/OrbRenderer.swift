@@ -33,6 +33,9 @@ final class OrbRenderer {
         var hazeAlpha: Float
         var cameraZ: Float
         var contentScale: Float
+        var pulse: Float
+        var levelFloor: Float
+        var levelCeiling: Float
         var octaves: Int32
         var isHaze: Int32
     }
@@ -375,6 +378,9 @@ final class OrbRenderer {
             hazeAlpha: hazeAlpha,
             cameraZ: OrbParameters.cameraDistance,
             contentScale: contentScale,
+            pulse: OrbParameters.pulse,
+            levelFloor: OrbParameters.levelFloor,
+            levelCeiling: OrbParameters.levelCeiling,
             octaves: OrbParameters.octaves,
             isHaze: 0
         )

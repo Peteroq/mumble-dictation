@@ -16,6 +16,16 @@ enum OrbParameters {
     static let octaves: Int32 = 3
     static let reactivity: Float = 0.74
 
+    /// How much the whole orb swells at full voice, on top of the displacement.
+    static let pulse: Float = 0.16
+
+    /// The slice of the level range that speech actually occupies, expanded to fill the orb's
+    /// whole response. `AudioCapture` maps roughly -50...0 dBFS onto 0...1, and ordinary speech
+    /// sits between about -42 and -22 of that — so without this the orb spends its life in the
+    /// middle third of its motion and looks like it is idling rather than listening.
+    static let levelFloor: Float = 0.10
+    static let levelCeiling: Float = 0.62
+
     // Point cloud. 40 segments across ~85pt of orb is about 2pt between dots — the coarsest
     // lattice that still reads as a lattice rather than a smear.
     static let segments = 40

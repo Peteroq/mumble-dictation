@@ -36,6 +36,9 @@ enum OrbShaders {
         float hazeAlpha;
         float cameraZ;
         float contentScale;
+        float pulse;
+        float levelFloor;
+        float levelCeiling;
         int octaves;
         int isHaze;
     };
@@ -149,11 +152,19 @@ enum OrbShaders {
         float3 p = normalize(raw);
         float shell = length(raw);
 
-        float drive = mix(1.0 - u.reactivity, 1.0, clamp(u.level, 0.0, 1.0));
+        // Speech RMS lands in a narrow band well inside 0...1 — it neither reaches silence
+        // between words nor approaches full scale — so feeding the level in raw meant the orb
+        // only ever used the middle of its range. Expanding the part that actually varies is
+        // what makes the motion read as a response to a voice.
+        float excited = smoothstep(u.levelFloor, u.levelCeiling, clamp(u.level, 0.0, 1.0));
+
+        float drive = mix(1.0 - u.reactivity, 1.0, excited);
         float n = fbm(p * u.noiseScale + float3(0.0, 0.0, u.time * u.flow), u.octaves);
         float disp = n * u.amplitude * drive;
 
-        float3 displaced = p * shell * (1.0 + disp);
+        // Loudness swells the whole form as well as roughening it. Displacement alone changes
+        // the silhouette without changing its size, which at this scale is easy to miss.
+        float3 displaced = p * shell * (1.0 + disp) * (1.0 + u.pulse * excited);
         float3 world = u.rotation * displaced;
 
         float4 mv = float4(world, 1.0);
@@ -166,15 +177,16 @@ enum OrbShaders {
         float rimTerm = pow(1.0 - abs(normalWorld.z), 2.0);
 
         float sizeScale = (u.isHaze != 0) ? (13.0 * u.haze + 4.0) : 1.0;
-        float size = u.dotSize * (1.0 + rimTerm * u.rim * 0.5) * (0.85 + 0.3 * seeds[vid]) * sizeScale;
+        float size = u.dotSize * (1.0 + rimTerm * u.rim * 0.5) * (0.85 + 0.3 * seeds[vid])
+                   * sizeScale * (1.0 + 0.4 * excited);
         out.pointSize = max(1.0, size * u.contentScale * (u.cameraZ / -mv.z));
 
         float depth = clamp((world.z + 1.5) / 3.0, 0.0, 1.0);
         float sweep = dot(normalWorld, normalize(float3(0.85, 0.62, 0.3))) * 0.5 + 0.5;
         out.shade = clamp((1.0 - sweep - 0.08) * u.spread + disp * 1.1, 0.0, 1.0);
 
-        float base = mix(0.5, 1.0, depth) * (1.0 + rimTerm * u.rim * 0.65) * (0.66 + 0.34 * drive);
-        float hazeA = mix(0.72, 1.0, depth) * (0.66 + 0.34 * drive) * u.hazeAlpha;
+        float base = mix(0.5, 1.0, depth) * (1.0 + rimTerm * u.rim * 0.65) * (0.5 + 0.5 * excited);
+        float hazeA = mix(0.72, 1.0, depth) * (0.45 + 0.55 * excited) * u.hazeAlpha;
         out.alpha = (u.isHaze != 0) ? hazeA : base;
         out.soft = (u.isHaze != 0) ? 1.0 : 0.0;
         return out;
