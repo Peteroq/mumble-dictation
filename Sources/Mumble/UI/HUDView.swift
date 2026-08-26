@@ -132,29 +132,29 @@ struct HUDView: View {
 
 /// The band of light and shade the orb and transcript sit on.
 ///
-/// Two gradients doing different jobs. The linear pass is the legibility floor — it has to be
-/// dense enough under the text to hold white type over an arbitrary desktop. The radial pass
-/// is the light, centred below the bottom edge so what reaches the screen is the top of a much
-/// larger glow rather than a circle with a visible middle.
-///
-/// The whole thing is then masked to nothing at the top. Both gradients otherwise reach the
-/// panel's upper edge still carrying value — the radial in particular, whose radius is far
-/// larger than the band is tall — and the panel clips there, leaving a hard horizontal line
-/// across the screen. Masking the composite means no future change to either gradient can
-/// reintroduce that edge.
+/// Three layers, all sharing one falloff shape so the blur, the shade and the glow arrive and
+/// leave together. Driving them from separate gradients is how you get a blurred region whose
+/// edge does not line up with the darkened one, which reads as a visible rectangle even when
+/// neither layer has a hard edge of its own.
 private struct Backdrop: View {
     var body: some View {
         ZStack {
-            LinearGradient(
-                stops: [
-                    .init(color: Brand.scrim.opacity(0), location: 0),
-                    .init(color: Brand.scrim.opacity(0.18), location: 0.42),
-                    .init(color: Brand.scrim.opacity(0.72), location: 0.74),
-                    .init(color: Brand.scrim.opacity(0.97), location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            // Progressive blur.
+            //
+            // Liquid Glass is the only real backdrop blur available to a borderless panel, and
+            // its radius is not adjustable — so the progression comes from fading the glass
+            // itself along the falloff rather than from varying a radius. What reaches the eye
+            // is blur that is absent at the top of the band and full-strength at the bottom.
+            // Untinted: the shade below is what darkens, and tinting here as well would double
+            // it in exactly the region that is already densest.
+            Rectangle()
+                .fill(.clear)
+                .glassEffect(.clear, in: Rectangle())
+                .mask(falloff)
+
+            Rectangle()
+                .fill(Brand.scrim)
+                .mask(falloff)
 
             RadialGradient(
                 stops: [
@@ -173,6 +173,10 @@ private struct Backdrop: View {
         }
         // Without this the blend mode would reach past the backdrop and tint the desktop.
         .compositingGroup()
+        // A last vertical cut to nothing at the top. The falloff already fades there, but its
+        // radii are fractions of the panel, and on a tall band the ellipse can still be
+        // carrying value where the window clips — which is a hard horizontal line across the
+        // screen. This makes that impossible regardless of what the falloff is set to.
         .mask(
             LinearGradient(
                 stops: [
@@ -186,6 +190,28 @@ private struct Backdrop: View {
             )
         )
         .ignoresSafeArea()
+    }
+
+    /// Dense behind the orb and the text, thinning towards the sides.
+    ///
+    /// Elliptical rather than linear because the panel is now the full width of the display:
+    /// a linear vertical fade covers the far corners of a wide screen as heavily as the middle,
+    /// which reads as a bar laid across the desktop rather than as light pooling under the
+    /// content. Radii are fractions of the panel, so the pool scales with the display instead
+    /// of being sized for one.
+    private var falloff: some View {
+        EllipticalGradient(
+            stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black.opacity(0.92), location: 0.38),
+                .init(color: .black.opacity(0.55), location: 0.66),
+                .init(color: .black.opacity(0.16), location: 0.86),
+                .init(color: .black.opacity(0), location: 1),
+            ],
+            center: UnitPoint(x: 0.5, y: 1.04),
+            startRadiusFraction: 0,
+            endRadiusFraction: 0.6
+        )
     }
 }
 
