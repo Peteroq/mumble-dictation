@@ -584,9 +584,14 @@ final class DictationController {
         }
     }
 
-    /// Light smoothing so the waveform glides instead of strobing at buffer rate.
+    /// Smoothing so the orb glides instead of strobing at buffer rate.
+    ///
+    /// Asymmetric on purpose: rise almost immediately, fall back gently. Meter ballistics work
+    /// this way because a symmetric filter averages the peaks away — the level ends up sitting
+    /// near the middle of its range the whole time you are talking, which is exactly what made
+    /// the orb look like it was idling rather than listening.
     private func updateLevel(_ new: Float) {
-        level += (new - level) * 0.35
+        level += (new - level) * (new > level ? 0.62 : 0.16)
     }
 
     private func fail(_ message: String) {

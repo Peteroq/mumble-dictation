@@ -76,11 +76,16 @@ enum HUDMetrics {
     /// disappear into — the effect is for text on its way out, not on its way in.
     static let transcriptStart: CGFloat = transcriptWidth * 0.5
 
-    static let contentSpacing: CGFloat = 0
+    /// Negative, and that is not a hack: the orb's render surface carries about 32pt of
+    /// transparent margin on each side so its halo has room to fade, and that margin is dead
+    /// space between the two. Pulling the text back into it closes the visual gap without
+    /// cropping the glow.
+    static let contentSpacing: CGFloat = -26
 
-    /// How far the orb and text sit above the bottom edge, leaving the densest part of the
-    /// gradient below them.
-    static let contentInset: CGFloat = 84
+    /// How far the orb and text sit above the bottom edge. Low enough to sit inside the
+    /// densest part of the pool rather than above it — the band's own height is unchanged, so
+    /// this moves the content down the gradient without moving the gradient.
+    static let contentInset: CGFloat = 40
 }
 
 struct HUDView: View {
