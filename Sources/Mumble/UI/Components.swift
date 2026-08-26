@@ -173,46 +173,39 @@ struct ActionButton: View {
 
 /// A level meter drawn as a row of soft capsule bars.
 ///
-/// The bars are damped rather than driven straight from the signal: rise is near-instant and
-/// fall is slow, which is what makes a meter readable. Tracking the level exactly produces a
-/// strobing row that reads as noise.
+/// The damping that makes a meter readable — rather than a row strobing at buffer rate —
+/// happens upstream in `DictationController.updateLevel`, so everything here is a pure
+/// function of the smoothed level and the clock.
 struct LevelMeter: View {
     /// Current input level, 0...1.
     let level: Float
     var isActive: Bool
 
-    /// The bar state lives in a plain reference type, deliberately *not* in `@State`. It has
-    /// to advance once per drawn frame, and SwiftUI state mutated inside a `Canvas` draw
-    /// closure is a mutation during view update — which SwiftUI logs as undefined behavior
-    /// and which, at 120fps, floods the process. A reference the view merely holds is
-    /// invisible to the state graph, so stepping it is safe.
-    @State private var movement = Movement()
-
-    private final class Movement {
-        var bars: [Double] = []
-    }
-
     var body: some View {
-        TimelineView(.animation) { _ in
+        // Throttled and paused, matching the HUD's waveform. A bare `TimelineView(.animation)`
+        // ticks at display rate — 120Hz here — forever, including while the app sits idle in
+        // the background with this window closed, which is both a constant CPU draw for a
+        // meter reading zero and a stream of calls into a view that may be on its way out.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isActive)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
             Canvas { context, size in
-                draw(in: &context, size: size)
+                draw(in: &context, size: size, at: time)
             }
         }
         .opacity(isActive ? 1 : 0.45)
         .animation(DS.Motion.lamp, value: isActive)
     }
 
-    private func draw(in context: inout GraphicsContext, size: CGSize) {
+    private func draw(in context: inout GraphicsContext, size: CGSize, at time: Double) {
         let pitch = DS.Material.barWidth + DS.Material.barGap
         let count = max(1, Int(size.width / pitch))
-        advance(count: count)
 
         // Left-to-right inset so the row of bars stays centered in whatever width it's given.
         let used = CGFloat(count) * pitch - DS.Material.barGap
         let originX = (size.width - used) / 2
 
         for index in 0..<count {
-            let value = movement.bars[index]
+            let value = barValue(index: index, of: count, at: time)
             let height = max(DS.Material.barMinHeight, CGFloat(value) * size.height)
             let x = originX + CGFloat(index) * pitch
             let rect = CGRect(
@@ -229,23 +222,26 @@ struct LevelMeter: View {
         }
     }
 
-    /// Advances every bar toward the current level, with each bar lagging the one before it.
-    /// The offset is what turns a flat row into a travelling ripple.
-    private func advance(count: Int) {
-        if movement.bars.count != count {
-            movement.bars = Array(repeating: 0, count: count)
-        }
+    /// One bar's height, as a pure function of level, position and time.
+    ///
+    /// Stateless on purpose. This used to integrate an attack/release envelope per bar in a
+    /// class held in `@State`, and read that `@State` from inside the `Canvas` draw closure —
+    /// which SwiftUI is free to invoke outside a view update, where reading `@State` is not
+    /// valid. `DictationController` already smooths `level` before it ever gets here, so the
+    /// envelope was smoothing something smooth; the motion it bought is reproduced by the
+    /// per-bar phase offset below, without holding any state to get wrong.
+    private func barValue(index: Int, of count: Int, at time: Double) -> Double {
         let target = Double(min(max(level, 0), 1))
-        for index in 0..<count {
-            // Bars away from center peak slightly lower, so the row reads as a waveform
-            // rather than a block.
-            let distance = abs(Double(index) - Double(count - 1) / 2) / Double(max(count, 2))
-            let scaled = target * (1 - distance * 0.55)
-            let current = movement.bars[index]
-            let time = scaled > current ? DS.Motion.needleAttack : DS.Motion.needleRelease
-            let step = min(1, 1 / (time * 60))
-            movement.bars[index] = current + (scaled - current) * step
-        }
+
+        // Bars away from center peak slightly lower, so the row reads as a waveform rather
+        // than a block.
+        let distance = abs(Double(index) - Double(count - 1) / 2) / Double(max(count, 2))
+        let shaped = target * (1 - distance * 0.55)
+
+        // Irrational multiplier keeps the offsets from lining up into a visible period.
+        let phase = (Double(index) * 0.618).truncatingRemainder(dividingBy: 1)
+        let wave = 0.5 + 0.5 * sin((time * 3.4 + phase) * 2 * .pi)
+        return shaped * (0.55 + 0.45 * wave)
     }
 }
 

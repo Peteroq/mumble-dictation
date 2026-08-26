@@ -248,10 +248,6 @@ enum DS {
         /// A status dot lighting up.
         static let lamp = Animation.easeOut(duration: 0.16)
 
-        /// Level meter ballistics. Bars rise fast and fall slowly, which is what makes a
-        /// meter readable — instantaneous decay reads as noise.
-        static let needleAttack: TimeInterval = 0.06
-        static let needleRelease: TimeInterval = 0.32
     }
 }
 
