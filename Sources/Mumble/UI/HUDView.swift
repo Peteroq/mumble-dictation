@@ -87,7 +87,11 @@ struct HUDView: View {
                 OrbView(level: controller.level, isActive: controller.state.isActive)
                     .frame(width: HUDMetrics.orbSize.width, height: HUDMetrics.orbSize.height)
 
-                StreamingText(text: label, color: isError ? Brand.inkError : Brand.ink)
+                StreamingText(
+                    text: label,
+                    color: isError ? Brand.inkError : Brand.ink,
+                    isActive: controller.state.isActive
+                )
             }
             .padding(.bottom, HUDMetrics.contentInset)
         }
@@ -158,51 +162,48 @@ private struct Backdrop: View {
     }
 }
 
-/// The transcript, revealed a character at a time and scrolled like a marquee.
+/// The transcript, typed out behind a blinking cursor and scrolled like a marquee.
 ///
 /// One line, always. Text is laid out at its natural width and shifted left once it outgrows
-/// the viewport, so the newest characters stay put at the right and everything older slides
-/// toward the orb and dissolves into the fade. Below the viewport width the offset clamps to
-/// zero, which keeps a short transcript sitting next to the orb instead of hugging the far
-/// edge — one expression covering both cases rather than two alignment modes.
-///
-/// The reveal head only moves forward, except when a revision changes text already on screen.
-/// Speech engines revise: they replace a word several words back once more audio arrives, so
-/// the head rewinds to the divergence point rather than restarting or ignoring the change.
-/// Corrections retype themselves and everything before them stays put.
+/// the viewport, so the cursor stays put at the right and everything older slides toward the
+/// orb and dissolves into the fade. Below the viewport width the offset clamps to zero, which
+/// keeps a short transcript sitting next to the orb instead of hugging the far edge — one
+/// expression covering both cases rather than two alignment modes.
 private struct StreamingText: View {
     let text: String
     let color: Color
+    /// Whether the HUD is up. Only used to stop the caret animating behind a hidden panel.
+    let isActive: Bool
 
-    @State private var revealed: Double = 0
+    @State private var revealedCount = 0
     @State private var textWidth: CGFloat = 0
 
-    /// Well clear of speech, which runs about 15 characters a second. The reveal is meant to
-    /// read as the words arriving, not as something typing them out after the fact.
-    private static let charactersPerSecond: Double = 115
+    /// Characters a second once the typing has caught up. Deliberately unhurried — the point
+    /// is to watch it type, not to have the words simply appear.
+    private static let baseRate: Double = 26
 
-    /// How many characters the fade covers at the head of the reveal.
-    private static let fadeWidth: Double = 2.5
+    /// Added per character still owed, so a burst of speech is caught up with rather than
+    /// trailed indefinitely. Without it a steady talker outruns the cursor and the gap grows
+    /// for the whole utterance; with it the rate rises just enough to close the backlog and
+    /// settles straight back to `baseRate`.
+    private static let catchUpPerCharacter: Double = 1.5
+    private static let maxRate: Double = 150
+
+    /// How long the line takes to slide one character's width. A touch longer than the gap
+    /// between characters at the base rate, so successive steps overlap into one glide
+    /// instead of reading as a series of jumps.
+    private static let scrollGlide: Double = 0.12
 
     /// How many trailing characters are laid out at all.
     ///
-    /// Only about seventy fit the viewport, and everything past the fade is invisible — but
-    /// SwiftUI still measures and lays out every character it is given, and a long dictation
-    /// runs to thousands. Trimming the head costs nothing visually: it is already scrolled off
-    /// and faded to zero, and dropping it shortens the line, which the offset absorbs exactly.
+    /// Only about seventy fit the viewport and everything past the fade is invisible, but
+    /// SwiftUI measures every character it is given and a long dictation runs to thousands.
+    /// Trimming the head costs nothing visually — it is already scrolled off and faded to
+    /// zero — and the shorter line is absorbed exactly by the offset.
     private static let window = 240
 
-    /// Roughly one character's worth of travel at speaking pace. The line steps by whole
-    /// characters, so each step is animated over about the interval between them — long enough
-    /// to glide, short enough that the text never lags behind its own last letter.
-    private static let scrollDuration: Double = 0.1
-
     var body: some View {
-        Text(attributed)
-            .font(DS.Font.transcript)
-            .lineLimit(1)
-            // Natural width, not the parent's: the whole point is to overflow and be clipped.
-            .fixedSize()
+        line
             .background {
                 GeometryReader { proxy in
                     Color.clear.onChange(of: proxy.size.width, initial: true) { _, width in
@@ -213,23 +214,61 @@ private struct StreamingText: View {
             // `offset` is a render-time transform and does not change layout bounds, so the
             // frame below still aligns the line to the leading edge before it is shifted.
             .offset(x: scrollOffset)
-            .animation(.linear(duration: Self.scrollDuration), value: scrollOffset)
+            .animation(.linear(duration: Self.scrollGlide), value: scrollOffset)
             .frame(width: HUDMetrics.transcriptWidth, alignment: .leading)
             .clipped()
             .mask(fade)
             .shadow(color: Brand.inkShadow, radius: 5, y: 1)
             .onChange(of: text) { old, new in
-                revealed = min(revealed, Double(new.commonPrefix(with: old).count))
+                // A revision rewinds only as far as the two strings diverge, so corrections
+                // retype themselves and everything before them stays put.
+                revealedCount = min(revealedCount, new.commonPrefix(with: old).count)
             }
-            .task(id: text) {
-                // Restarts on every revision and stops as soon as the head reaches the end, so
-                // nothing is running while the transcript sits still.
-                let target = Double(text.count)
-                while revealed < target, !Task.isCancelled {
-                    try? await Task.sleep(for: .milliseconds(16))
-                    revealed = min(target, revealed + 0.016 * Self.charactersPerSecond)
-                }
-            }
+            .task(id: text) { await type() }
+    }
+
+    private var line: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(visible)
+                .font(DS.Font.transcript)
+                .foregroundStyle(color)
+                .lineLimit(1)
+                // Natural width, not the parent's: the whole point is to overflow and be clipped.
+                .fixedSize()
+            Cursor(color: color, isActive: isActive)
+        }
+    }
+
+    /// Advances the reveal from wall-clock rather than by sleeping once per character.
+    ///
+    /// `task(id:)` restarts every time the transcript changes, and during speech that is
+    /// several times a second. A per-character sleep loses its pending sleep on each restart
+    /// and effectively advances one character per revision instead of at the typing rate,
+    /// which is what made this stutter and fall behind. Deriving the count from elapsed time
+    /// means a restart costs nothing: it re-bases on the current count and carries on.
+    private func type() async {
+        let startCount = revealedCount
+        let start = ContinuousClock.now
+        let backlog = Double(max(0, text.count - startCount))
+        let rate = min(Self.maxRate, Self.baseRate + backlog * Self.catchUpPerCharacter)
+
+        while revealedCount < text.count, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(16))
+            guard !Task.isCancelled else { return }
+            // One reading, not two: sampling the clock separately for each component would
+            // pair a seconds value with attoseconds from a later instant.
+            let components = start.duration(to: .now).components
+            let elapsed = Double(components.seconds) + Double(components.attoseconds) * 1e-18
+            let next = min(text.count, startCount + Int(elapsed * rate))
+            // Only when it actually moves. Assigning every tick would rebuild and re-measure
+            // the whole line sixty times a second to show the same characters.
+            if next != revealedCount { revealedCount = next }
+        }
+    }
+
+    private var visible: String {
+        let shown = text.prefix(revealedCount)
+        return String(shown.suffix(Self.window))
     }
 
     private var scrollOffset: CGFloat {
@@ -250,32 +289,41 @@ private struct StreamingText: View {
             endPoint: .trailing
         )
     }
+}
 
-    /// Three runs, not one attribute per character: everything well behind the head is a single
-    /// opaque run, only the few characters inside the fade window are styled individually, and
-    /// the rest is not emitted at all. Per-character attributes across a long transcript would
-    /// rebuild the whole string every frame.
-    private var attributed: AttributedString {
-        let all = Array(text)
-        guard !all.isEmpty else { return AttributedString() }
+/// The caret at the head of the transcript.
+///
+/// The blink is one animation on one property rather than a state change per frame — SwiftUI
+/// animates opacity without re-evaluating the body at all.
+///
+/// It is started and stopped with the HUD, which matters more than it sounds: the panel is
+/// built once at launch and merely ordered out, so the view never disappears. A
+/// `repeatForever` begun in `onAppear` runs for the life of the process, driving the render
+/// loop behind an invisible window — measured at 15% of a core with nothing on screen.
+private struct Cursor: View {
+    let color: Color
+    let isActive: Bool
 
-        // The reveal head counts from the start of the whole transcript, so it has to be
-        // rebased onto the window before it can index into it.
-        let start = max(0, all.count - Self.window)
-        let characters = Array(all[start...])
-        let head = revealed - Double(start)
-        let solidEnd = max(0, min(characters.count, Int((head - Self.fadeWidth).rounded(.down))))
-        let fadeEnd = max(0, min(characters.count, Int(head.rounded(.up))))
+    @State private var dim = false
 
-        var result = AttributedString(String(characters[0..<solidEnd]))
-        result.foregroundColor = color
-
-        for index in solidEnd..<fadeEnd {
-            var piece = AttributedString(String(characters[index]))
-            let progress = (head - Double(index)) / Self.fadeWidth
-            piece.foregroundColor = color.opacity(min(1, max(0, progress)))
-            result += piece
-        }
-        return result
+    var body: some View {
+        RoundedRectangle(cornerRadius: 1, style: .continuous)
+            .fill(color)
+            .frame(width: 2, height: 21)
+            .opacity(dim ? 0.05 : 1)
+            .onChange(of: isActive, initial: true) { _, active in
+                guard active else {
+                    // A repeating animation is only displaced by another assignment to the
+                    // same property; an explicitly animation-free transaction is what ends it
+                    // rather than blending into it.
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { dim = false }
+                    return
+                }
+                withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) {
+                    dim = true
+                }
+            }
     }
 }
