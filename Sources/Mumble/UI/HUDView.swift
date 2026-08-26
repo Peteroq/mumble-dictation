@@ -42,7 +42,7 @@ enum Brand {
 /// and the bleed margin in one place is what stops them drifting apart.
 enum HUDMetrics {
     /// The visible capsule.
-    static let pillSize = CGSize(width: 340, height: 76)
+    static let pillSize = CGSize(width: 420, height: 112)
 
     /// Transparent margin around the pill, sized to hold the shadow.
     ///
@@ -60,8 +60,12 @@ enum HUDMetrics {
         )
     }
 
-    /// The level meter inside the pill.
-    static let waveformSize = CGSize(width: 84, height: 32)
+    /// The orb's square inside the pill.
+    ///
+    /// 96pt, not the 84x32 the waveform used. The lattice is what carries the design, and a
+    /// lattice needs about 2pt between dots to read as one — below roughly 90pt the whole
+    /// thing collapses into an undifferentiated glow no matter how the parameters are set.
+    static let orbSize = CGSize(width: 96, height: 96)
 }
 
 struct HUDView: View {
@@ -69,8 +73,11 @@ struct HUDView: View {
 
     var body: some View {
         HStack(spacing: DS.Space.base) {
-            Waveform(level: controller.level, isActive: controller.state == .listening)
-                .frame(width: HUDMetrics.waveformSize.width, height: HUDMetrics.waveformSize.height)
+            OrbView(level: controller.level, isActive: controller.state.isActive)
+                .frame(width: HUDMetrics.orbSize.width, height: HUDMetrics.orbSize.height)
+                // Metal draws into its own layer, so it does not inherit the capsule's clip.
+                // Rounding it keeps a stray corner sprite from squaring off the glass edge.
+                .clipShape(Circle())
 
             Text(label)
                 .font(DS.Font.body)
@@ -82,9 +89,9 @@ struct HUDView: View {
                 .animation(.easeOut(duration: 0.12), value: controller.transcript)
         }
         .padding(.horizontal, DS.Space.roomy)
-        .padding(.vertical, DS.Space.base)
+        .padding(.vertical, DS.Space.tight)
         .frame(width: HUDMetrics.pillSize.width, height: HUDMetrics.pillSize.height)
-        // A full pill, not a rounded rect: at 76pt tall the capsule is the largest radius
+        // A full pill, not a rounded rect: at 112pt tall the capsule is the largest radius
         // the shape allows, and the HUD is the one element that should read as completely
         // soft against whatever app it floats over.
         //
@@ -123,49 +130,5 @@ struct HUDView: View {
         case .error(let message): message
         case .idle: ""
         }
-    }
-}
-
-/// Level-reactive bars. Each bar gets a fixed phase offset so the group ripples rather
-/// than pumping in unison.
-private struct Waveform: View {
-    let level: Float
-    let isActive: Bool
-
-    private static let barCount = 12
-    private static let phases: [Double] = (0..<barCount).map { index in
-        // Irrational multiplier keeps the offsets from lining up into a visible period.
-        (Double(index) * 0.618).truncatingRemainder(dividingBy: 1)
-    }
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isActive)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
-            HStack(alignment: .center, spacing: 3) {
-                ForEach(0..<Self.barCount, id: \.self) { index in
-                    Capsule()
-                        .fill(Brand.gradient)
-                        .frame(width: 3, height: height(for: index, at: t))
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private func height(for index: Int, at time: TimeInterval) -> CGFloat {
-        let floorHeight: CGFloat = 3
-        guard isActive else { return floorHeight }
-
-        let phase = Self.phases[index]
-        let wave = sin(time * 6.0 + phase * .pi * 2)
-        // `level` is linear amplitude, which sits low for ordinary speech — a normal
-        // speaking voice rarely passes 0.3, so the bars used to barely leave the floor.
-        // The square root expands the bottom of the range, which is where speech actually
-        // lives. The gain is kept just above 1 so ordinary speech reads clearly without
-        // pinning the meter — it should still have somewhere left to go when you get loud.
-        let amplitude = min(1, CGFloat(sqrt(Double(max(0, level)))) * 1.2)
-        // Wave rides on top of the level so bars still breathe during quiet passages.
-        let scaled = amplitude * (0.55 + 0.45 * CGFloat(wave))
-        return floorHeight + max(0, scaled) * (HUDMetrics.waveformSize.height - floorHeight)
     }
 }
