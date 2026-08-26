@@ -34,6 +34,8 @@ final class OrbRenderer {
         var cameraZ: Float
         var contentScale: Float
         var pulse: Float
+        var chaos: Float
+        var turbulence: Float
         var levelFloor: Float
         var levelCeiling: Float
         var octaves: Int32
@@ -379,6 +381,8 @@ final class OrbRenderer {
             cameraZ: OrbParameters.cameraDistance,
             contentScale: contentScale,
             pulse: OrbParameters.pulse,
+            chaos: OrbParameters.chaos,
+            turbulence: OrbParameters.turbulence,
             levelFloor: OrbParameters.levelFloor,
             levelCeiling: OrbParameters.levelCeiling,
             octaves: OrbParameters.octaves,
