@@ -48,6 +48,8 @@ enum OrbParameters {
 
     /// Camera distance at 1x. The orb is framed to fill its square, so this is the prototype's
     /// base distance divided by the zoom the 96pt preset settled on.
-    static let cameraDistance: Float = 16.8 / 4.6
+    /// Framed to about 57% of the render surface rather than filling it, so the bloom has
+    /// somewhere to fade out before the texture edge.
+    static let cameraDistance: Float = 16.8 / 3.0
     static let fieldOfView: Float = 0.72
 }
