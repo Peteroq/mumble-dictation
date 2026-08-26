@@ -36,10 +36,28 @@ final class DictationController {
         case finishing
         case error(String)
 
+        /// Whether a recording is under way. Governs the record button, the level meter and
+        /// the elapsed counter — everything that should stay lit until the utterance is
+        /// genuinely done with.
         var isActive: Bool {
             switch self {
             case .starting, .connecting, .listening, .finishing: true
             case .idle, .error: false
+            }
+        }
+
+        /// Whether the HUD should be on screen. Deliberately not the same set.
+        ///
+        /// `finishing` is excluded: the key is already up by then, and keeping the band around
+        /// while the engine finalises means the HUD outlives the gesture that summoned it. It
+        /// closes on release instead, and the text lands in the app either way.
+        ///
+        /// `error` is included, which `isActive` is not — the HUD has a case for rendering the
+        /// message and it was never being shown one.
+        var showsHUD: Bool {
+            switch self {
+            case .starting, .connecting, .listening, .error: true
+            case .idle, .finishing: false
             }
         }
     }
