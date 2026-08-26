@@ -22,9 +22,17 @@ enum Brand {
     /// wallpaper is carried by `inkShadow` instead of by more tint.
     static let glassTint = Color.black.opacity(0.15)
 
-    /// A soft dark halo behind the text. At this little tint the glass alone can't keep
-    /// white text off a white desktop, and this costs far less clarity than tinting up.
-    static let inkShadow = Color.black.opacity(0.45)
+    /// A soft dark halo behind the text, for the stretch where the scrim has already faded
+    /// out but the text has not.
+    static let inkShadow = Color.black.opacity(0.5)
+
+    /// The band rising from the foot of the screen. Not pure black — a trace of blue keeps it
+    /// from reading as a dead rectangle laid over the desktop.
+    static let scrim = Color(red: 0.01, green: 0.012, blue: 0.03)
+
+    /// The light the orb throws into the scrim. Warm, from the near end of the prism ramp, so
+    /// the halo looks like it is coming off the orb rather than being a second gradient.
+    static let glow = Color(red: 1.0, green: 0.55, blue: 0.72)
 
     static var gradient: LinearGradient {
         LinearGradient(
@@ -37,78 +45,54 @@ enum Brand {
 
 /// Geometry shared between the SwiftUI view and the AppKit panel that hosts it.
 ///
-/// The two have to agree: the panel's content rect is the hard clip boundary for everything
-/// SwiftUI draws, so a shadow that bleeds past it is simply cut off. Keeping the pill size
-/// and the bleed margin in one place is what stops them drifting apart.
+/// The panel's content rect is the hard clip boundary for everything SwiftUI draws, so these
+/// have to agree. The panel is now the full width of the screen — the backdrop is a band that
+/// rises from the bottom edge, not a floating chip — which is why there is no longer a bleed
+/// margin: nothing draws outside the band.
 enum HUDMetrics {
-    /// The visible capsule.
-    static let pillSize = CGSize(width: 420, height: 112)
+    /// How far up the screen the band reaches. Generous, because the gradient needs room to
+    /// fade out; a short band ends in a visible horizontal edge.
+    static let bandHeight: CGFloat = 340
 
-    /// Transparent margin around the pill, sized to hold the shadow.
+    /// The orb's render surface — larger than the orb itself.
     ///
-    /// `DS.Shadow.window` blurs 40pt and is offset 16pt down, so it reaches 56pt below the
-    /// capsule and 40pt to either side. The margin is uniform at the larger figure rather
-    /// than per-edge: it costs nothing (the panel is transparent and ignores mouse events)
-    /// and it means a future change to the shadow only has to update one number.
-    static let shadowMargin: CGFloat = 56
+    /// The bloom is clipped to this texture, so the halo has to reach zero before the edge or
+    /// it ends in a visible square. The orb draws at roughly 85pt inside 150, which leaves the
+    /// glow about 32pt to fall off in. On the old glass pill this did not matter; on the scrim
+    /// it would be the first thing you saw.
+    static let orbSize = CGSize(width: 150, height: 150)
 
-    /// What the hosting panel must actually be sized to.
-    static var panelSize: CGSize {
-        CGSize(
-            width: pillSize.width + shadowMargin * 2,
-            height: pillSize.height + shadowMargin * 2
-        )
-    }
+    /// How wide the transcript may run before wrapping. Bounded and left-aligned so a growing
+    /// sentence does not shove the orb sideways on every word.
+    static let transcriptWidth: CGFloat = 520
 
-    /// The orb's square inside the pill.
-    ///
-    /// 96pt, not the 84x32 the waveform used. The lattice is what carries the design, and a
-    /// lattice needs about 2pt between dots to read as one — below roughly 90pt the whole
-    /// thing collapses into an undifferentiated glow no matter how the parameters are set.
-    static let orbSize = CGSize(width: 96, height: 96)
+    static let contentSpacing: CGFloat = 0
+
+    /// How far the orb and text sit above the bottom edge, leaving the densest part of the
+    /// gradient below them.
+    static let contentInset: CGFloat = 84
 }
 
 struct HUDView: View {
     @Bindable var controller: DictationController
 
     var body: some View {
-        HStack(spacing: DS.Space.base) {
-            OrbView(level: controller.level, isActive: controller.state.isActive)
-                .frame(width: HUDMetrics.orbSize.width, height: HUDMetrics.orbSize.height)
-                // Metal draws into its own layer, so it does not inherit the capsule's clip.
-                // Rounding it keeps a stray corner sprite from squaring off the glass edge.
-                .clipShape(Circle())
+        ZStack(alignment: .bottom) {
+            Backdrop()
 
-            Text(label)
-                .font(DS.Font.body)
-                .foregroundStyle(isError ? Brand.inkError : Brand.ink)
-                .lineLimit(2)
-                .truncationMode(.head)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .shadow(color: Brand.inkShadow, radius: 4, y: 1)
-                .animation(.easeOut(duration: 0.12), value: controller.transcript)
+            HStack(alignment: .center, spacing: HUDMetrics.contentSpacing) {
+                OrbView(level: controller.level, isActive: controller.state.isActive)
+                    .frame(width: HUDMetrics.orbSize.width, height: HUDMetrics.orbSize.height)
+
+                StreamingText(text: label, color: isError ? Brand.inkError : Brand.ink)
+                    .frame(width: HUDMetrics.transcriptWidth, alignment: .leading)
+            }
+            .padding(.bottom, HUDMetrics.contentInset)
         }
-        .padding(.horizontal, DS.Space.roomy)
-        .padding(.vertical, DS.Space.tight)
-        .frame(width: HUDMetrics.pillSize.width, height: HUDMetrics.pillSize.height)
-        // A full pill, not a rounded rect: at 112pt tall the capsule is the largest radius
-        // the shape allows, and the HUD is the one element that should read as completely
-        // soft against whatever app it floats over.
-        //
-        // Liquid Glass rather than `.ultraThinMaterial`: a material is a flat translucent
-        // fill, which over a borderless transparent panel reads as a grey wash. The glass
-        // effect samples and refracts what is actually behind the window and brings its own
-        // specular edge, which is why there is no border stroke — glass draws its own, and a
-        // hairline on top of it reads as a seam.
-        //
-        // `.clear` rather than `.regular` because the HUD sits over the user's actual work
-        // and should stay see-through; the dark tint is what keeps it legible without adding
-        // opacity back.
-        .glassEffect(.clear.tint(Brand.glassTint), in: Capsule(style: .continuous))
-        .dsShadow(DS.Shadow.window)
-        // The panel clips to its content rect, so the shadow needs real space inside the
-        // view — without this it is cut off square along the capsule's bounding box.
-        .padding(HUDMetrics.shadowMargin)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        // The panel already ignores mouse events; this keeps SwiftUI from bothering to build
+        // hit-test geometry for a view that spans the width of the display.
+        .allowsHitTesting(false)
     }
 
     private var isError: Bool {
@@ -130,5 +114,111 @@ struct HUDView: View {
         case .error(let message): message
         case .idle: ""
         }
+    }
+}
+
+/// The band of light and shade the orb and transcript sit on.
+///
+/// Two gradients, not one. The linear pass is the legibility floor — it has to be dense enough
+/// under the text to hold white type over an arbitrary desktop. The radial pass is the light,
+/// and it is centred slightly below the bottom edge so what reaches the screen is the top of a
+/// much larger glow rather than a circle with a visible middle.
+private struct Backdrop: View {
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                stops: [
+                    .init(color: Brand.scrim.opacity(0), location: 0),
+                    .init(color: Brand.scrim.opacity(0.16), location: 0.34),
+                    .init(color: Brand.scrim.opacity(0.62), location: 0.68),
+                    .init(color: Brand.scrim.opacity(0.9), location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            RadialGradient(
+                stops: [
+                    .init(color: Brand.glow.opacity(0.20), location: 0),
+                    .init(color: Brand.glow.opacity(0.07), location: 0.45),
+                    .init(color: Brand.glow.opacity(0), location: 1),
+                ],
+                center: UnitPoint(x: 0.5, y: 1.12),
+                startRadius: 0,
+                endRadius: 620
+            )
+            // Additive, so the glow lifts the scrim instead of laying a pink film over it.
+            .blendMode(.plusLighter)
+        }
+        // Without this the blend mode would reach past the backdrop and tint the desktop.
+        .compositingGroup()
+        .ignoresSafeArea()
+    }
+}
+
+/// The transcript, revealed a character at a time.
+///
+/// The reveal head is kept in `revealed` and only ever moves forward, except when a revision
+/// changes text the user has already seen. Speech engines revise: they will replace a word
+/// several words back once more audio arrives. Rewinding to the divergence point — rather than
+/// restarting, or ignoring the change — means corrections retype themselves and everything
+/// before them stays put.
+private struct StreamingText: View {
+    let text: String
+    let color: Color
+
+    @State private var revealed: Double = 0
+
+    /// Fast enough to keep up with speech, slow enough that the motion is legible. Speech runs
+    /// about 15 characters a second; this stays comfortably ahead without arriving instantly.
+    private static let charactersPerSecond: Double = 48
+
+    /// How many characters the fade is spread across at the head of the reveal.
+    private static let fadeWidth: Double = 3
+
+    var body: some View {
+        Text(attributed)
+            .font(DS.Font.transcript)
+            .lineLimit(3)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .shadow(color: Brand.inkShadow, radius: 5, y: 1)
+            .onChange(of: text) { old, new in
+                // Rewind only as far as the two strings diverge.
+                revealed = min(revealed, Double(new.commonPrefix(with: old).count))
+            }
+            .task(id: text) {
+                // Restarts on every revision and stops as soon as the head reaches the end, so
+                // there is no timer running while the transcript sits still.
+                let target = Double(text.count)
+                while revealed < target, !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(16))
+                    revealed = min(target, revealed + 0.016 * Self.charactersPerSecond)
+                }
+            }
+    }
+
+    /// Three runs, not one attribute per character: everything well behind the head is a single
+    /// opaque run, only the few characters inside the fade window are styled individually, and
+    /// the rest is not emitted at all. Per-character attributes across a long transcript would
+    /// rebuild the whole string every frame.
+    private var attributed: AttributedString {
+        let characters = Array(text)
+        guard !characters.isEmpty else { return AttributedString() }
+
+        let head = revealed
+        let solidEnd = max(0, min(characters.count, Int((head - Self.fadeWidth).rounded(.down))))
+        let fadeEnd = max(0, min(characters.count, Int(head.rounded(.up))))
+
+        var result = AttributedString(String(characters[0..<solidEnd]))
+        result.foregroundColor = color
+
+        for index in solidEnd..<fadeEnd {
+            var piece = AttributedString(String(characters[index]))
+            let progress = (head - Double(index)) / Self.fadeWidth
+            piece.foregroundColor = color.opacity(min(1, max(0, progress)))
+            result += piece
+        }
+        return result
     }
 }

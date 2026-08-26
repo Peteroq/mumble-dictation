@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The floating capsule that appears while you hold the key.
+/// The band of light that rises from the foot of the screen while you hold the key.
 ///
 /// The single most important property here is that this panel **never becomes key**.
 /// If it did, the user's text field would lose focus and `TextInjector` would have
@@ -10,7 +10,9 @@ import SwiftUI
 final class HUDPanel: NSPanel {
     init(controller: DictationController) {
         super.init(
-            contentRect: NSRect(origin: .zero, size: HUDMetrics.panelSize),
+            // Placeholder. The real frame spans whichever screen `reposition` picks, and
+            // is set there before the panel is ever ordered in.
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: HUDMetrics.bandHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -33,11 +35,15 @@ final class HUDPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    /// Parks the panel just above the Dock, horizontally centered on the active screen.
+    /// Spans the full width of the active screen, sitting on the bottom of its visible frame.
     ///
-    /// The panel is larger than the capsule by `HUDMetrics.shadowMargin` on every side, so
-    /// the margin is subtracted back out here — otherwise the transparent border, not the
-    /// capsule, would be what sits 96pt above the Dock.
+    /// Resized on every presentation rather than once at construction: the user can move the
+    /// app between displays of different widths between one hold and the next, and a band
+    /// sized for the other screen would either stop short or run off the edge.
+    ///
+    /// The bottom edge is `visibleFrame`, not `frame`, so the band starts above the Dock
+    /// instead of laying a gradient over it. The panel ignores mouse events either way, but a
+    /// darkened Dock reads as a rendering fault rather than as an intentional backdrop.
     ///
     /// `NSScreen.main` is the screen with the *key window* — and an accessory app with a
     /// non-activating panel never has one, so it can be nil. Falling back to `screens.first`
@@ -48,12 +54,14 @@ final class HUDPanel: NSPanel {
             return
         }
         let visible = screen.visibleFrame
-        let size = frame.size
-        setFrameOrigin(
-            NSPoint(
-                x: visible.midX - size.width / 2,
-                y: visible.minY + 96 - HUDMetrics.shadowMargin
-            )
+        setFrame(
+            NSRect(
+                x: visible.minX,
+                y: visible.minY,
+                width: visible.width,
+                height: HUDMetrics.bandHeight
+            ),
+            display: true
         )
     }
 
