@@ -155,7 +155,7 @@ enum DS {
         static let body = rounded(size: 13, weight: .regular)
         /// The live transcript in the HUD. Larger than `body` because the HUD is no longer a
         /// chip you glance at — it spans the foot of the screen and is read while speaking.
-        static let transcript = rounded(size: 18, weight: .regular)
+        static let transcript = rounded(size: 22, weight: .regular)
         static let bodyEmphasis = rounded(size: 13, weight: .semibold)
         static let title = rounded(size: 20, weight: .semibold)
 
