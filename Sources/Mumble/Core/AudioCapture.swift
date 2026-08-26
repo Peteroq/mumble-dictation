@@ -15,50 +15,137 @@ final class AudioCapture: @unchecked Sendable {
     private nonisolated(unsafe) var onBuffer: (@Sendable (AudioChunk) -> Void)?
     /// Called on the audio thread with a 0…1 RMS level, for the HUD waveform.
     private nonisolated(unsafe) var onLevel: (@Sendable (Float) -> Void)?
+    /// Called once, on the audio thread, when the first buffer arrives from the device.
+    private nonisolated(unsafe) var onReady: (@Sendable () -> Void)?
+    /// Latches so a mid-recording device swap doesn't re-announce the mic as newly live.
+    private nonisolated(unsafe) var hasDeliveredAudio = false
 
+    private var configObserver: NSObjectProtocol?
+
+    /// - Returns: the device the tap was bound to, or `nil` if CoreAudio had no default input.
+    @discardableResult
     func start(
         outputFormat: AVAudioFormat,
         onBuffer: @escaping @Sendable (AudioChunk) -> Void,
-        onLevel: @escaping @Sendable (Float) -> Void
-    ) throws {
-        guard !isRunning else { return }
+        onLevel: @escaping @Sendable (Float) -> Void,
+        onReady: @escaping @Sendable () -> Void = {}
+    ) throws -> AudioInputDevice? {
+        guard !isRunning else { return AudioInputDevice.systemDefault }
 
         self.onBuffer = onBuffer
         self.onLevel = onLevel
+        self.onReady = onReady
         self.outputFormat = outputFormat
+        hasDeliveredAudio = false
 
-        let input = engine.inputNode
-        let nativeFormat = input.outputFormat(forBus: 0)
-
-        converter = nativeFormat == outputFormat
-            ? nil
-            : AVAudioConverter(from: nativeFormat, to: outputFormat)
-
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 2048, format: nativeFormat) { [weak self] buffer, _ in
-            self?.handle(buffer)
-        }
-
+        let device = try bindTap(outputFormat: outputFormat)
         engine.prepare()
         try engine.start()
         isRunning = true
-        Log.audio.info("capture started — native \(nativeFormat.sampleRate)Hz → engine \(outputFormat.sampleRate)Hz")
+        observeConfigurationChanges()
+        return device
     }
 
     func stop() {
         guard isRunning else { return }
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+        }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
         converter = nil
         onBuffer = nil
         onLevel = nil
+        onReady = nil
         Log.audio.info("capture stopped")
+    }
+
+    // MARK: - Device binding
+
+    /// Points the input node at the current system default and installs the tap.
+    ///
+    /// Re-pinning on every start is the whole reason AirPods work without a relaunch:
+    /// `AVAudioEngine` binds its input node to whichever device was default the first time
+    /// the node was pulled and never re-checks it afterwards. The device must be set before
+    /// the native format is read — the format belongs to the device, so reading it first
+    /// would build the converter for the mic we are about to stop using.
+    @discardableResult
+    private func bindTap(outputFormat: AVAudioFormat) throws -> AudioInputDevice? {
+        let input = engine.inputNode
+        let device = AudioInputDevice.systemDefault
+
+        // Before the device swap, not after: on a rebind the old tap is still installed and
+        // still bound to the device we are about to pull out from under it.
+        input.removeTap(onBus: 0)
+
+        if let device {
+            do {
+                try input.auAudioUnit.setDeviceID(device.id)
+            } catch {
+                // Not fatal: the node keeps whatever device it already had, which is very
+                // likely the right one anyway. Worth saying out loud rather than swallowing.
+                Log.audio.error("could not pin input to \(device.name, privacy: .public): \(error.localizedDescription)")
+            }
+        }
+
+        let nativeFormat = input.outputFormat(forBus: 0)
+        converter = nativeFormat == outputFormat
+            ? nil
+            : AVAudioConverter(from: nativeFormat, to: outputFormat)
+
+        input.installTap(onBus: 0, bufferSize: 2048, format: nativeFormat) { [weak self] buffer, _ in
+            self?.handle(buffer)
+        }
+
+        Log.audio.info("""
+            capture on \(device?.name ?? "system default", privacy: .public) — \
+            native \(nativeFormat.sampleRate)Hz → engine \(outputFormat.sampleRate)Hz
+            """)
+        return device
+    }
+
+    /// The engine tears its own graph down when the hardware changes underneath it — a
+    /// device disconnecting, or the default input switching mid-utterance. Rebinding keeps
+    /// the rest of the recording alive instead of ending it in silence the user can't see.
+    private func observeConfigurationChanges() {
+        guard configObserver == nil else { return }
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            self?.rebind()
+        }
+    }
+
+    private func rebind() {
+        guard isRunning, let outputFormat else { return }
+        Log.audio.info("audio configuration changed — rebinding input")
+        engine.stop()
+        do {
+            try bindTap(outputFormat: outputFormat)
+            engine.prepare()
+            try engine.start()
+        } catch {
+            Log.audio.error("rebind failed: \(error.localizedDescription)")
+            isRunning = false
+        }
     }
 
     // MARK: - Audio thread
 
     private func handle(_ buffer: AVAudioPCMBuffer) {
+        // The first buffer is the only honest "the mic is live" signal there is. A
+        // Bluetooth device returns from `engine.start()` long before it has finished
+        // negotiating a call profile, so start-of-engine would announce readiness during
+        // a stretch where nothing is being recorded at all.
+        if !hasDeliveredAudio {
+            hasDeliveredAudio = true
+            onReady?()
+        }
+
         onLevel?(Self.rms(of: buffer))
 
         guard let outputFormat else { return }
