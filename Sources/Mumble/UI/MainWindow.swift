@@ -77,10 +77,14 @@ private struct TransportPanel: View {
             VStack(alignment: .leading, spacing: DS.Space.snug) {
                 TextLabel(text: "Transport")
                 HStack(spacing: DS.Space.snug) {
+                    // One prominent style in both states — the pill stays ink so the label
+                    // is always at full contrast, and the glyph carries the state: the
+                    // accent to arm, the destructive coral to stop.
                     ActionButton(
                         title: isRecording ? "Stop" : "Record",
                         systemImage: isRecording ? "stop.fill" : "circle.fill",
-                        isProminent: true
+                        isProminent: true,
+                        iconColor: isRecording ? DS.Color.meterRed : DS.Color.accent
                     ) {
                         if isRecording {
                             controller.stopButtonRecording()
@@ -95,6 +99,13 @@ private struct TransportPanel: View {
                     }
                     .padding(.leading, DS.Space.tight)
                 }
+            }
+
+            VStack(alignment: .leading, spacing: DS.Space.snug) {
+                TextLabel(text: "Input")
+                Readout(text: controller.inputDevice?.name ?? "No microphone")
+                    .lineLimit(1)
+                    .frame(maxWidth: 200, alignment: .leading)
             }
 
             VStack(alignment: .leading, spacing: DS.Space.snug) {
