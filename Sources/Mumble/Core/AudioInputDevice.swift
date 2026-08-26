@@ -1,40 +1,27 @@
 import CoreAudio
 import Foundation
 
-/// The system's current default input device.
+/// The system's current default input device, for display and for change detection.
 ///
-/// `AVAudioEngine` on macOS does **not** follow the system default input on its own. Its
-/// input node binds to whatever device was default the first time the node was pulled and
-/// never re-checks, so connecting AirPods after launch would otherwise keep recording from
-/// the built-in mic until the app was relaunched. `AudioCapture` re-pins the node from this
-/// type on every start, which is what makes "put in AirPods, then talk" work.
+/// Read-only on purpose. An earlier version of this used the device id to pin
+/// `AVAudioEngine`'s input node with `setDeviceID`, on the theory that the engine would not
+/// otherwise follow the default input. It does: macOS routes the node through the
+/// default-device aggregate, which moves off the built-in mic the instant AirPods connect.
+/// Forcing the node onto the raw Bluetooth device knocked it off that aggregate mid-format
+/// negotiation, `installTap` failed with "config change pending", and the recording captured
+/// nothing at all. The id survives only so `Equatable` can tell two identically named
+/// devices apart.
 struct AudioInputDevice: Equatable, Sendable {
     let id: AudioDeviceID
     let name: String
-    let transport: UInt32
 
-    /// Wireless mics negotiate a call-quality profile before delivering a single sample.
-    /// On AirPods that handshake is long enough to hear, which is what the connecting cue
-    /// exists to cover; a built-in mic is live within a buffer or two.
-    var isWireless: Bool {
-        switch transport {
-        case kAudioDeviceTransportTypeBluetooth,
-             kAudioDeviceTransportTypeBluetoothLE,
-             kAudioDeviceTransportTypeAirPlay,
-             kAudioDeviceTransportTypeContinuityCaptureWireless:
-            true
-        default:
-            false
-        }
-    }
-
+    /// There is deliberately no `isWireless` here, and no transport type to derive it from.
+    /// Whether a device is slow to wake is measured — the connecting cue fires off the
+    /// first buffer's actual arrival time — and a transport check would only ever be a
+    /// worse guess at the same thing.
     static var systemDefault: AudioInputDevice? {
         guard let id = defaultInputID, id != AudioDeviceID(kAudioObjectUnknown) else { return nil }
-        return AudioInputDevice(
-            id: id,
-            name: name(of: id) ?? "Unknown input",
-            transport: transport(of: id)
-        )
+        return AudioInputDevice(id: id, name: name(of: id) ?? "Unknown input")
     }
 
     // MARK: - CoreAudio
@@ -71,17 +58,6 @@ struct AudioInputDevice: Equatable, Sendable {
         return value.takeRetainedValue() as String
     }
 
-    private static func transport(of id: AudioDeviceID) -> UInt32 {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyTransportType,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var transport: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        let status = AudioObjectGetPropertyData(id, &address, 0, nil, &size, &transport)
-        return status == noErr ? transport : 0
-    }
 }
 
 /// Reports default-input changes on the main actor.
