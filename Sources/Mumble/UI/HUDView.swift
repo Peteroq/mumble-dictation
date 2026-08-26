@@ -62,9 +62,12 @@ enum HUDMetrics {
     /// it would be the first thing you saw.
     static let orbSize = CGSize(width: 150, height: 150)
 
-    /// How wide the transcript may run before wrapping. Bounded and left-aligned so a growing
-    /// sentence does not shove the orb sideways on every word.
-    static let transcriptWidth: CGFloat = 520
+    /// The transcript's viewport. The line runs at its natural width behind this and is
+    /// scrolled, so this is how much of it you see rather than where it wraps.
+    static let transcriptWidth: CGFloat = 620
+
+    /// Fraction of the viewport the leading dissolve covers, measured from the orb.
+    static let transcriptFade: CGFloat = 0.22
 
     static let contentSpacing: CGFloat = 0
 
@@ -85,7 +88,6 @@ struct HUDView: View {
                     .frame(width: HUDMetrics.orbSize.width, height: HUDMetrics.orbSize.height)
 
                 StreamingText(text: label, color: isError ? Brand.inkError : Brand.ink)
-                    .frame(width: HUDMetrics.transcriptWidth, alignment: .leading)
             }
             .padding(.bottom, HUDMetrics.contentInset)
         }
@@ -156,40 +158,72 @@ private struct Backdrop: View {
     }
 }
 
-/// The transcript, revealed a character at a time.
+/// The transcript, revealed a character at a time and scrolled like a marquee.
 ///
-/// The reveal head is kept in `revealed` and only ever moves forward, except when a revision
-/// changes text the user has already seen. Speech engines revise: they will replace a word
-/// several words back once more audio arrives. Rewinding to the divergence point — rather than
-/// restarting, or ignoring the change — means corrections retype themselves and everything
-/// before them stays put.
+/// One line, always. Text is laid out at its natural width and shifted left once it outgrows
+/// the viewport, so the newest characters stay put at the right and everything older slides
+/// toward the orb and dissolves into the fade. Below the viewport width the offset clamps to
+/// zero, which keeps a short transcript sitting next to the orb instead of hugging the far
+/// edge — one expression covering both cases rather than two alignment modes.
+///
+/// The reveal head only moves forward, except when a revision changes text already on screen.
+/// Speech engines revise: they replace a word several words back once more audio arrives, so
+/// the head rewinds to the divergence point rather than restarting or ignoring the change.
+/// Corrections retype themselves and everything before them stays put.
 private struct StreamingText: View {
     let text: String
     let color: Color
 
     @State private var revealed: Double = 0
+    @State private var textWidth: CGFloat = 0
 
-    /// Fast enough to keep up with speech, slow enough that the motion is legible. Speech runs
-    /// about 15 characters a second; this stays comfortably ahead without arriving instantly.
-    private static let charactersPerSecond: Double = 48
+    /// Well clear of speech, which runs about 15 characters a second. The reveal is meant to
+    /// read as the words arriving, not as something typing them out after the fact.
+    private static let charactersPerSecond: Double = 115
 
-    /// How many characters the fade is spread across at the head of the reveal.
-    private static let fadeWidth: Double = 3
+    /// How many characters the fade covers at the head of the reveal.
+    private static let fadeWidth: Double = 2.5
+
+    /// How many trailing characters are laid out at all.
+    ///
+    /// Only about seventy fit the viewport, and everything past the fade is invisible — but
+    /// SwiftUI still measures and lays out every character it is given, and a long dictation
+    /// runs to thousands. Trimming the head costs nothing visually: it is already scrolled off
+    /// and faded to zero, and dropping it shortens the line, which the offset absorbs exactly.
+    private static let window = 240
+
+    /// Roughly one character's worth of travel at speaking pace. The line steps by whole
+    /// characters, so each step is animated over about the interval between them — long enough
+    /// to glide, short enough that the text never lags behind its own last letter.
+    private static let scrollDuration: Double = 0.1
 
     var body: some View {
         Text(attributed)
             .font(DS.Font.transcript)
-            .lineLimit(3)
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(1)
+            // Natural width, not the parent's: the whole point is to overflow and be clipped.
+            .fixedSize()
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.onChange(of: proxy.size.width, initial: true) { _, width in
+                        textWidth = width
+                    }
+                }
+            }
+            // `offset` is a render-time transform and does not change layout bounds, so the
+            // frame below still aligns the line to the leading edge before it is shifted.
+            .offset(x: scrollOffset)
+            .animation(.linear(duration: Self.scrollDuration), value: scrollOffset)
+            .frame(width: HUDMetrics.transcriptWidth, alignment: .leading)
+            .clipped()
+            .mask(fade)
             .shadow(color: Brand.inkShadow, radius: 5, y: 1)
             .onChange(of: text) { old, new in
-                // Rewind only as far as the two strings diverge.
                 revealed = min(revealed, Double(new.commonPrefix(with: old).count))
             }
             .task(id: text) {
                 // Restarts on every revision and stops as soon as the head reaches the end, so
-                // there is no timer running while the transcript sits still.
+                // nothing is running while the transcript sits still.
                 let target = Double(text.count)
                 while revealed < target, !Task.isCancelled {
                     try? await Task.sleep(for: .milliseconds(16))
@@ -198,15 +232,38 @@ private struct StreamingText: View {
             }
     }
 
+    private var scrollOffset: CGFloat {
+        min(0, HUDMetrics.transcriptWidth - textWidth)
+    }
+
+    /// Opaque everywhere but the leading edge, where the line dissolves as it travels toward
+    /// the orb. A hard clip there would read as text hitting a wall.
+    private var fade: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black.opacity(0), location: 0),
+                .init(color: .black.opacity(0.35), location: HUDMetrics.transcriptFade * 0.45),
+                .init(color: .black, location: HUDMetrics.transcriptFade),
+                .init(color: .black, location: 1),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
     /// Three runs, not one attribute per character: everything well behind the head is a single
     /// opaque run, only the few characters inside the fade window are styled individually, and
     /// the rest is not emitted at all. Per-character attributes across a long transcript would
     /// rebuild the whole string every frame.
     private var attributed: AttributedString {
-        let characters = Array(text)
-        guard !characters.isEmpty else { return AttributedString() }
+        let all = Array(text)
+        guard !all.isEmpty else { return AttributedString() }
 
-        let head = revealed
+        // The reveal head counts from the start of the whole transcript, so it has to be
+        // rebased onto the window before it can index into it.
+        let start = max(0, all.count - Self.window)
+        let characters = Array(all[start...])
+        let head = revealed - Double(start)
         let solidEnd = max(0, min(characters.count, Int((head - Self.fadeWidth).rounded(.down))))
         let fadeEnd = max(0, min(characters.count, Int(head.rounded(.up))))
 
