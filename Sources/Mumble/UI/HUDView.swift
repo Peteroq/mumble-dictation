@@ -178,21 +178,22 @@ private struct StreamingText: View {
     @State private var revealedCount = 0
     @State private var textWidth: CGFloat = 0
 
-    /// Characters a second once the typing has caught up. Deliberately unhurried — the point
-    /// is to watch it type, not to have the words simply appear.
-    private static let baseRate: Double = 26
+    /// Characters a second. Constant, and deliberately unhurried.
+    ///
+    /// There was a backlog term here that raised the rate when the typing fell behind. It read
+    /// badly: the rate is fixed when the loop starts, so a large revision arriving made the
+    /// text sprint and then drop back to a crawl on the next one — a stutter rather than the
+    /// catching-up it was meant to be. A steady rate trails a fast talker, which is the right
+    /// trade: the point is to watch it type.
+    private static let rate: Double = 18
 
-    /// Added per character still owed, so a burst of speech is caught up with rather than
-    /// trailed indefinitely. Without it a steady talker outruns the cursor and the gap grows
-    /// for the whole utterance; with it the rate rises just enough to close the backlog and
-    /// settles straight back to `baseRate`.
-    private static let catchUpPerCharacter: Double = 1.5
-    private static let maxRate: Double = 150
-
-    /// How long the line takes to slide one character's width. A touch longer than the gap
-    /// between characters at the base rate, so successive steps overlap into one glide
-    /// instead of reading as a series of jumps.
-    private static let scrollGlide: Double = 0.12
+    /// How long the line takes to slide one character's width — exactly the gap between
+    /// characters, so the scroll tracks the typing instead of chasing it.
+    ///
+    /// This was longer than the interval, which meant each glide was retargeted before it
+    /// arrived and the line sat permanently behind its own last letter. Deriving it from the
+    /// rate is what keeps the two from drifting apart again.
+    private static var scrollGlide: Double { 1 / rate }
 
     /// How many trailing characters are laid out at all.
     ///
@@ -219,10 +220,14 @@ private struct StreamingText: View {
             .clipped()
             .mask(fade)
             .shadow(color: Brand.inkShadow, radius: 5, y: 1)
-            .onChange(of: text) { old, new in
-                // A revision rewinds only as far as the two strings diverge, so corrections
-                // retype themselves and everything before them stays put.
-                revealedCount = min(revealedCount, new.commonPrefix(with: old).count)
+            .onChange(of: text) { _, new in
+                // Clamped to the new length, and no further. Rewinding to the point where the
+                // strings diverge made corrections retype themselves, which sounds right and
+                // looks wrong: engines revise words several back while you are still speaking,
+                // so the caret kept jumping backwards mid-sentence. Letting a revised word
+                // change in place costs one frame of flicker and keeps the typing moving
+                // forwards, which is the thing being watched.
+                revealedCount = min(revealedCount, new.count)
             }
             .task(id: text) { await type() }
     }
@@ -249,8 +254,6 @@ private struct StreamingText: View {
     private func type() async {
         let startCount = revealedCount
         let start = ContinuousClock.now
-        let backlog = Double(max(0, text.count - startCount))
-        let rate = min(Self.maxRate, Self.baseRate + backlog * Self.catchUpPerCharacter)
 
         while revealedCount < text.count, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(16))
@@ -259,7 +262,7 @@ private struct StreamingText: View {
             // pair a seconds value with attoseconds from a later instant.
             let components = start.duration(to: .now).components
             let elapsed = Double(components.seconds) + Double(components.attoseconds) * 1e-18
-            let next = min(text.count, startCount + Int(elapsed * rate))
+            let next = min(text.count, startCount + Int(elapsed * Self.rate))
             // Only when it actually moves. Assigning every tick would rebuild and re-measure
             // the whole line sixty times a second to show the same characters.
             if next != revealedCount { revealedCount = next }
