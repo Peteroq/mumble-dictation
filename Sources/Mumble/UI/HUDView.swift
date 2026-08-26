@@ -82,6 +82,10 @@ enum HUDMetrics {
     /// cropping the glow.
     static let contentSpacing: CGFloat = -26
 
+    /// How far below its resting place the content starts, and sinks back to on the way out.
+    /// Comfortably more than the content inset, so it begins fully below the screen edge.
+    static let entryRise: CGFloat = 64
+
     /// How far the orb and text sit above the bottom edge. Low enough to sit inside the
     /// densest part of the pool rather than above it — the band's own height is unchanged, so
     /// this moves the content down the gradient without moving the gradient.
@@ -106,12 +110,14 @@ struct HUDView: View {
                 )
             }
             .padding(.bottom, HUDMetrics.contentInset)
-            // The window carries the band in; this carries the content, a shade behind it and
-            // with a little overshoot. Staggering the two is what stops the whole thing
-            // reading as one flat slab sliding about.
-            .scaleEffect(controller.state.isActive ? 1 : 0.9, anchor: .bottom)
+            // All of the movement lives here rather than on the window. The window fades in
+            // place; the content rises into it from below the bottom edge and is clipped by
+            // the panel on the way, which is what reads as coming up from off-screen without
+            // the band's own edge ever being visible in transit.
+            .offset(y: controller.state.isActive ? 0 : HUDMetrics.entryRise)
+            .scaleEffect(controller.state.isActive ? 1 : 0.94, anchor: .bottom)
             .opacity(controller.state.isActive ? 1 : 0)
-            .animation(.spring(response: 0.46, dampingFraction: 0.74), value: controller.state.isActive)
+            .animation(.spring(response: 0.5, dampingFraction: 0.82), value: controller.state.isActive)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         // The panel already ignores mouse events; this keeps SwiftUI from bothering to build
