@@ -107,7 +107,8 @@ app: build
 		echo ""; \
 	fi
 
-## Only ever targets the Mumble executable — never the separate `mumble` app.
+## Only ever targets the Mumble executable, by exact name — never another dictation app
+## that happens to be running.
 run: app
 	@pkill -x $(EXEC) 2>/dev/null || true
 	@open "$(BUNDLE)"

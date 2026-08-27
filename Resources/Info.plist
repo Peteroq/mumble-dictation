@@ -6,12 +6,13 @@
 	<string>Mumble</string>
 	<key>CFBundleDisplayName</key>
 	<string>Mumble</string>
-	<!-- Deliberately space-free and distinct from the existing app's `mumble`, so that
-	     `pkill`/`killall` on either app can never match the other. -->
+	<!-- Deliberately space-free, and distinct from any other dictation app's executable,
+	     so that `pkill`/`killall` on either can never match the other. -->
 	<key>CFBundleExecutable</key>
 	<string>Mumble</string>
-	<!-- Separate from the existing Mumble's com.mumble.client: distinct TCC identity,
-	     distinct preferences domain, no shared state of any kind. -->
+	<!-- Its own identifier, never one shared with or derived from another dictation app:
+	     TCC keys the Accessibility and Microphone grants to this string, so sharing it
+	     would mean sharing permissions, preferences and state. -->
 	<key>CFBundleIdentifier</key>
 	<string>ai.pivotstudio.mumble</string>
 	<key>CFBundlePackageType</key>
