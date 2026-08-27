@@ -73,6 +73,11 @@ final class DictationController {
     private(set) var inputDevice: AudioInputDevice? = AudioInputDevice.systemDefault
 
     private let hotkey = HotkeyMonitor()
+
+    /// Whether the mic is open because the key was tapped twice rather than because it is
+    /// being held. Read by the HUD, which has to say so: with nothing held there is no
+    /// gesture in progress to remind you the mic is live.
+    private(set) var isHandsFree = false
     private let capture = AudioCapture()
     private let inputObserver = AudioInputObserver()
 
@@ -152,6 +157,13 @@ final class DictationController {
         hotkey.key = Settings.shared.pushToTalkKey
         hotkey.onPress = { [weak self] in self?.beginDictation() }
         hotkey.onRelease = { [weak self] in self?.endDictation() }
+        // Only claims hands-free if there is actually a recording to hold open: a double tap
+        // that began on a failed start would otherwise leave the flag set with nothing live.
+        hotkey.onLatch = { [weak self] in
+            guard let self, state.isActive else { return }
+            isHandsFree = true
+        }
+        hotkey.onUnlatch = { [weak self] in self?.endDictation() }
         return hotkey.start()
     }
 
@@ -193,6 +205,7 @@ final class DictationController {
     private func beginDictation() {
         guard case .idle = state else { return }
         state = .starting
+        isHandsFree = false
         transcript = ""
         holdStarted = Date()
         isComparing = Settings.shared.compareMode
@@ -364,6 +377,7 @@ final class DictationController {
         // inside `finish()`, and smart cleanup adds up to 4s on top.
         guard state.isActive, state != .finishing else { return }
         cancelConnectionFeedback()
+        isHandsFree = false
         state = .finishing
         capture.stop()
         level = 0
