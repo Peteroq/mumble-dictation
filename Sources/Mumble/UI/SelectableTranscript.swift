@@ -194,10 +194,37 @@ final class TranscriptTextView: NSTextView {
         popover.behavior = .transient
         popover.animates = false
         popover.contentViewController = NSHostingController(rootView: makeActions(for: selection))
-        popover.show(relativeTo: anchor, of: self, preferredEdge: .maxY)
+        // `.minY`, not `.maxY`: an `NSTextView` is flipped, so `.maxY` is the *bottom* of the
+        // selection on screen. Anchored to the first fragment, this asks for the panel over
+        // the top line of the selection rather than under the last one.
+        popover.show(relativeTo: anchor, of: self, preferredEdge: .minY)
+        settle(popover, over: anchor)
         actions = popover
 
         observeScrolling()
+    }
+
+    /// Puts the panel where `.minY` was asked to put it.
+    ///
+    /// AppKit's edge math is wrong for a flipped positioning view: it lands the panel's top a
+    /// flat 346pt above the anchor, measured the same whatever the window size, the row, or
+    /// the panel's own height. That constant is stable enough to have been tempting and far
+    /// too strange to trust, so this corrects against the selection's real position on screen
+    /// instead — the panel's bottom edge, which is where its arrow tip is, is moved to meet
+    /// the top of the highlighted line.
+    ///
+    /// Only the origin moves, so the arrow stays under the words it was aimed at. `animates`
+    /// is off, and the panel's window is already at its final frame when `show` returns, so
+    /// nothing of the first placement is ever on screen.
+    private func settle(_ popover: NSPopover, over anchor: NSRect) {
+        guard let panel = popover.contentViewController?.view.window,
+              let window
+        else { return }
+
+        let onScreen = window.convertToScreen(convert(anchor, to: nil))
+        let rise = onScreen.maxY - panel.frame.minY
+        guard rise != 0 else { return }
+        panel.setFrameOrigin(NSPoint(x: panel.frame.minX, y: panel.frame.minY + rise))
     }
 
     private func makeActions(for selection: String) -> SelectionActions {
