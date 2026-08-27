@@ -18,10 +18,21 @@ let package = Package(
             path: "Sources/MumbleDictionary",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // The cleanup guard is its own target for the same reason the dictionary is: so it
+        // can be tested without the app. It is the one piece here with a security argument
+        // behind it — it is what stops a model answering your dictation instead of cleaning
+        // it — and the app links FoundationModels, which CI's older macOS cannot load. A
+        // test bundle that reaches the app is a test bundle that never runs there.
+        .target(
+            name: "MumbleCleanup",
+            path: "Sources/MumbleCleanup",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .executableTarget(
             name: "Mumble",
             dependencies: [
                 "MumbleDictionary",
+                "MumbleCleanup",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             path: "Sources/Mumble",
@@ -29,13 +40,10 @@ let package = Package(
                 .swiftLanguageMode(.v6)
             ]
         ),
-        // The app target is an executable; SwiftPM can still test it, which is what keeps
-        // `CleanupGuard` — the one piece of the app with a security argument behind it —
-        // under test without carving it into its own module.
         .testTarget(
-            name: "MumbleTests",
-            dependencies: ["Mumble"],
-            path: "Tests/MumbleTests",
+            name: "MumbleCleanupTests",
+            dependencies: ["MumbleCleanup"],
+            path: "Tests/MumbleCleanupTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

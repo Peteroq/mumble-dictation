@@ -1,3 +1,4 @@
+import MumbleCleanup
 import Foundation
 
 /// Cleanup via the Claude API — the optional higher-quality tier above the on-device model.

@@ -1,6 +1,6 @@
 import Testing
 
-@testable import Mumble
+@testable import MumbleCleanup
 
 /// The guard is the only thing standing between a helpful model and its answer being typed
 /// into the user's document, and the strength dial widens what it will accept. These pin the

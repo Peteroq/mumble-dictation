@@ -1,17 +1,27 @@
 import Foundation
+import OSLog
 
 /// Shared between every model-backed `TextFormatter` — the instructions given to the model
 /// and the guardrail that rejects a response that isn't recognizably a cleaned version of
 /// the input. Kept in one place so the two model tiers can't drift apart on what "plausible
 /// cleanup" means.
-enum CleanupGuard {
+public enum CleanupGuard {
+    /// Its own logger rather than the app's `Log.speech`.
+    ///
+    /// This target is deliberately free of anything the app links, so that it can be tested
+    /// on a machine that cannot run the app — CI builds on an older macOS than the app's
+    /// deployment target, and a test bundle that pulls in FoundationModels fails to load
+    /// there before a single assertion runs. Same subsystem and category, so the output
+    /// still lands where the rest of the speech logging does.
+    private static let log = Logger(subsystem: "ai.pivotstudio.mumble", category: "speech")
+
     /// What the model is told to do, at the strength the user picked.
     ///
     /// The first three rules never change. They are what keeps this a text processor rather
     /// than an assistant, and the failure they defend against — dictating a question and
     /// getting its answer typed into your document — does not become more acceptable because
     /// the user asked for a heavier clean-up.
-    static func instructions(for strength: CleanupStrength) -> String {
+    public static func instructions(for strength: CleanupStrength) -> String {
         """
         You clean up raw speech-to-text transcripts. You are a text processor, not an \
         assistant.
@@ -41,7 +51,7 @@ enum CleanupGuard {
     ///
     /// Measured against the development cases: legitimate cleanup introduces zero novel
     /// content words at every strength, while an answered question introduces at least one.
-    static func isPlausibleCleanup(
+    public static func isPlausibleCleanup(
         original: String,
         cleaned: String,
         strength: CleanupStrength = .standard
@@ -58,7 +68,7 @@ enum CleanupGuard {
         let vocabulary = Set(originalTokens)
         let invented = cleanedTokens.filter { !vocabulary.contains($0) }
         guard invented.isEmpty else {
-            Log.speech.info("cleanup rejected — invented words: \(invented.prefix(5).joined(separator: ", "), privacy: .public)")
+            log.info("cleanup rejected — invented words: \(invented.prefix(5).joined(separator: ", "), privacy: .public)")
             return false
         }
 
@@ -86,7 +96,7 @@ enum CleanupGuard {
         let floor = Double(cleanedTokens.count) / Double(max(1, spoken))
         let ceiling = Double(cleanedTokens.count) / Double(originalTokens.count)
         guard floor >= strength.minimumRatio, ceiling <= 1.5 else {
-            Log.speech.info("cleanup rejected — length \(floor, format: .fixed(precision: 2)) of spoken, \(ceiling, format: .fixed(precision: 2)) of raw")
+            log.info("cleanup rejected — length \(floor, format: .fixed(precision: 2)) of spoken, \(ceiling, format: .fixed(precision: 2)) of raw")
             return false
         }
 
@@ -101,7 +111,7 @@ enum CleanupGuard {
             let survived = Set(originalTokens).count { kept.contains($0) }
             let retention = Double(survived) / Double(Set(originalTokens).count)
             guard retention >= strength.minimumRetention else {
-                Log.speech.info("cleanup rejected — retention \(retention, format: .fixed(precision: 2))")
+                log.info("cleanup rejected — retention \(retention, format: .fixed(precision: 2))")
                 return false
             }
         }

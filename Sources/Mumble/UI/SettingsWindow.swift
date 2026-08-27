@@ -1,3 +1,4 @@
+import MumbleCleanup
 import SwiftUI
 
 /// Settings — a page of the main window rather than a window of its own.
