@@ -265,6 +265,15 @@ enum DS {
         /// reads as a shape — what should register is colour, not a blob.
         static let meshBlur: CGFloat = 90
 
+        /// The title bar the window doesn't have.
+        ///
+        /// `.hiddenTitleBar` removes the bar but not the traffic lights, so the top strip of
+        /// the window is still spoken for. `titlebar` is that strip's height — anything drawn
+        /// in it centres on the lights — and `titlebarInset` is where content clears the
+        /// rightmost of them.
+        static let titlebar: CGFloat = 28
+        static let titlebarInset: CGFloat = 88
+
         /// The orb standing in for the level meter, in the transport bar. Its render surface
         /// carries transparent margin for the bloom, so the orb itself draws smaller.
         static let transportOrb: CGFloat = 124
@@ -302,6 +311,9 @@ enum DS {
         static let transcript = rounded(size: 22, weight: .regular)
         static let bodyEmphasis = rounded(size: 13, weight: .semibold)
         static let title = rounded(size: 20, weight: .semibold)
+        /// The app's name in the title strip. Small and quiet on purpose: it sits in the same
+        /// 28pt band as the traffic lights, where anything larger stops being chrome.
+        static let wordmark = rounded(size: 13, weight: .semibold)
 
         /// Readouts and timings. Monospaced so digits don't shift as they tick.
         static let counter = SwiftUI.Font.system(size: 12, weight: .medium, design: .monospaced)
