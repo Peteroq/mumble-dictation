@@ -17,10 +17,18 @@ struct MainWindow: View {
 
     enum Section: String, CaseIterable, Identifiable {
         case transcriptions
+        case prompts
         case dictionary
 
         var id: String { rawValue }
-        var title: String { self == .transcriptions ? "Transcriptions" : "Dictionary" }
+
+        var title: String {
+            switch self {
+            case .transcriptions: "Transcriptions"
+            case .prompts: "Prompts"
+            case .dictionary: "Dictionary"
+            }
+        }
     }
 
     var body: some View {
@@ -37,6 +45,7 @@ struct MainWindow: View {
 
                     switch section {
                     case .transcriptions: TranscriptionList()
+                    case .prompts: PromptsPanel()
                     case .dictionary: DictionaryPanel()
                     }
                 }
@@ -416,6 +425,8 @@ private struct TranscriptionList: View {
     /// The fix being written, if any. Held here rather than on the row because rows are in a
     /// `LazyVStack` and a sheet attached to one would be torn down when it scrolls away.
     @State private var fix: TranscriptFix?
+    /// The prompt being written from a transcript, held here for the same reason.
+    @State private var draft: PromptDraft?
 
     private var runs: [DictationRun] {
         let all = store.runs.reversed().map { $0 }
@@ -442,6 +453,15 @@ private struct TranscriptionList: View {
                         TranscriptionRow(
                             run: run,
                             onFix: { heard in fix = TranscriptFix(run: run, heard: heard) },
+                            onKeep: {
+                                draft = PromptDraft(
+                                    prompt: Prompt(
+                                        title: Prompt.title(from: run.text),
+                                        text: run.text
+                                    ),
+                                    isNew: true
+                                )
+                            },
                             onDelete: {
                                 withAnimation(DS.Motion.panel) { RunLog.delete(run) }
                             }
@@ -452,6 +472,12 @@ private struct TranscriptionList: View {
             }
         }
         .sheet(item: $fix) { FixWordSheet(fix: $0) }
+        // The same editor the Prompts tab uses, with the transcript already in it: the
+        // fastest way to write a long prompt is to say it, and the history is already full of
+        // things that were said.
+        .sheet(item: $draft) { draft in
+            PromptEditor(draft: draft) { PromptStore.shared.add($0) }
+        }
     }
 
     private var footer: some View {
@@ -485,6 +511,8 @@ private struct TranscriptionRow: View {
     let run: DictationRun
     /// The highlighted text, when the user asks for it to be fixed.
     let onFix: (String) -> Void
+    /// Keep this transcript as a prompt.
+    let onKeep: () -> Void
     let onDelete: () -> Void
 
     @State private var didCopy = false
@@ -501,6 +529,8 @@ private struct TranscriptionRow: View {
                     .font(DS.Font.caption)
                     .foregroundStyle(DS.Color.inkSecondary)
                 copyButton
+                keepButton
+                    .opacity(isHovering ? 1 : 0)
                 deleteButton
                     .opacity(isHovering ? 1 : 0)
             }
@@ -542,6 +572,21 @@ private struct TranscriptionRow: View {
             .background(DS.Color.well, in: Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+
+    /// Keeps this transcript as a prompt. On hover only: it is a deliberate act on one row,
+    /// not something that needs to be on screen for all of them at once.
+    private var keepButton: some View {
+        Button(action: onKeep) {
+            Image(systemName: "bookmark")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(DS.Color.inkSecondary)
+                .padding(.horizontal, DS.Space.snug)
+                .padding(.vertical, DS.Space.tight)
+                .background(DS.Color.well, in: Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Save as a prompt")
     }
 
     /// Appears on hover only, and deletes without a confirmation — a single transcript is
