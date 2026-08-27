@@ -208,6 +208,7 @@ private struct TransportPanel: View {
     @Bindable var controller: DictationController
     var isCollapsed: Bool
 
+    @State private var settings = Settings.shared
     @State private var elapsed: TimeInterval = 0
     @State private var startedAt: Date?
     @State private var isPressed = false
@@ -221,9 +222,27 @@ private struct TransportPanel: View {
             input
             Spacer()
         }
-        .padding(.horizontal, DS.Space.base)
-        .frame(height: isCollapsed ? DS.Material.transportCollapsed : DS.Material.transportHeight)
-        .background(Card())
+        // The padding is the gap the inner radii are cut against, so it has to be the same
+        // on every side — see `insetRadius`.
+        .padding(.horizontal, gap)
+        .frame(height: cardHeight)
+        // Not `Card`: this one is pinned over moving content, and `panel` is a 0.12 tint —
+        // transcripts read straight through it. Its own glass is what stops them, and it has
+        // to be the card's rather than the veil's, because a wash heavy enough to do the same
+        // job across the full width of the window flattens the top of it at rest.
+        .background {
+            dsShape(DS.Radius.panel)
+                .fill(DS.Color.panel)
+                // Glass blurs what passes behind the card; `chassis` is what stops it coming
+                // through at all. Glass on its own lightens the surface, so a blurred ghost
+                // of the transcript was still there in the value even once it stopped being
+                // readable — measurably brighter than the card had been without it.
+                .background { dsShape(DS.Radius.panel).fill(DS.Color.chassis) }
+                .background {
+                    Color.clear.glassEffect(.regular, in: dsShape(DS.Radius.panel))
+                }
+                .dsShadow(DS.Shadow.panel)
+        }
         .onChange(of: controller.state.isActive) { _, active in
             startedAt = active ? Date() : nil
             if !active { elapsed = 0 }
@@ -261,11 +280,17 @@ private struct TransportPanel: View {
                 OrbView(level: isRecording ? controller.level : 0, isActive: true)
                     .frame(width: orbSize, height: orbSize)
                     .allowsHitTesting(false)
-                TextLabel(text: isRecording ? "Stop" : "Record", color: DS.Color.ink)
+                Text(isRecording ? "Stop" : "Record")
+                    .font(DS.Font.control)
+                    .foregroundStyle(DS.Color.ink)
             }
-            .padding(.trailing, DS.Space.base)
+            // Deeper on the right than the left, where the orb's own transparent margin is
+            // already holding the label off the edge.
+            .padding(.trailing, DS.Space.roomy)
             .frame(height: buttonHeight)
-            .background(cap)
+            .background {
+                ground.dsShadow(isPressed ? DS.Shadow.pressed : DS.Shadow.raised)
+            }
             .scaleEffect(isPressed ? DS.Material.keyPressScale : 1)
             .offset(y: isPressed ? DS.Material.keyTravel : 0)
         }
@@ -275,35 +300,87 @@ private struct TransportPanel: View {
         }
     }
 
-    /// Glass with a well tint over it, rather than the prism ramp the pill used to carry. The
-    /// orb inside is already the app's colour at full strength, and a saturated fill behind it
-    /// left the one thing worth looking at competing with its own button.
-    private var cap: some View {
-        Capsule(style: .continuous)
-            .fill(DS.Color.well)
-            .dsShadow(isPressed ? DS.Shadow.pressed : DS.Shadow.raised)
-            .background {
-                Color.clear.glassEffect(.regular, in: Capsule(style: .continuous))
-            }
+    /// The ground both controls sit on: a flat dark wash, cut to a radius concentric with the
+    /// card's. Not the prism ramp the pill used to carry — the orb inside is already the app's
+    /// colour at full strength, and a saturated fill behind it left the one thing worth
+    /// looking at competing with its own button.
+    private var ground: some View {
+        dsShape(insetRadius).fill(DS.Color.sunken)
     }
 
     // MARK: The readouts
 
-    /// The device name on its own inset ground, so it reads as a value the app is reporting
-    /// rather than as a line of text laid on the card.
+    /// The input, as a picker rather than a readout.
+    ///
+    /// It writes the same `Settings.inputDeviceUID` the Microphone panel in Settings does, so
+    /// there is one preference and not two — including its opt-in nature. "System default" is
+    /// nil, and nil is the case that lets the engine follow the default-device aggregate,
+    /// which is what moves dictation onto AirPods the moment they connect. Naming a device
+    /// pins Mumble to it and gives that up on purpose.
+    ///
+    /// The list is rebuilt each time the menu opens rather than observed: devices come and go,
+    /// and a stale list is a preference pointing at something unplugged.
     private var input: some View {
-        Readout(text: controller.inputDevice?.name ?? "No microphone")
-            .lineLimit(1)
-            .frame(maxWidth: DS.Material.inputChipWidth, alignment: .leading)
-            .padding(.horizontal, DS.Space.base)
-            .padding(.vertical, DS.Space.snug)
-            .background {
-                dsShape(DS.Radius.control)
-                    .fill(DS.Color.well)
-                    .background {
-                        Color.clear.glassEffect(.regular, in: dsShape(DS.Radius.control))
-                    }
+        Menu {
+            // An inline `Picker` rather than a list of `Button`s: a menu drops the image out
+            // of a `Label`, so a hand-rolled checkmark simply does not appear, and the row
+            // that is actually selected looks the same as every other one.
+            Picker(selection: inputSelection) {
+                Text("System default").tag(String?.none)
+                ForEach(AudioInputDevice.all) { device in
+                    Text(device.name).tag(String?.some(device.uid))
+                }
+            } label: {
+                EmptyView()
             }
+            .pickerStyle(.inline)
+        } label: {
+            HStack(spacing: DS.Space.snug) {
+                Readout(text: controller.inputDevice?.name ?? "No microphone")
+                    .lineLimit(1)
+                    .frame(maxWidth: DS.Material.inputChipWidth, alignment: .leading)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(DS.Color.inkSecondary)
+            }
+            .padding(.horizontal, DS.Space.base)
+            .frame(height: buttonHeight)
+            .background(ground)
+        }
+        // `.button` with a plain button style, not `.borderlessButton`: that style discards a
+        // custom label and draws AppKit's own popup layout instead — background, padding and
+        // frame all dropped, with the indicator moved to the left of the text.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
+    /// What the picker reads and writes. `reloadInputDevice` is what makes the card's label
+    /// change the moment a device is picked rather than after the next recording.
+    private var inputSelection: Binding<String?> {
+        Binding(
+            get: { settings.inputDeviceUID },
+            set: { uid in
+                settings.inputDeviceUID = uid
+                controller.reloadInputDevice()
+            }
+        )
+    }
+
+    // MARK: Geometry
+
+    private var cardHeight: CGFloat {
+        isCollapsed ? DS.Material.transportCollapsed : DS.Material.transportHeight
+    }
+
+    /// The margin between the card's edge and the controls on it, on every side.
+    private var gap: CGFloat { (cardHeight - buttonHeight) / 2 }
+
+    /// Cut against the card's own radius so the two curves stay parallel — and recut when the
+    /// card collapses, because the gap it is measured from changes with it.
+    private var insetRadius: CGFloat {
+        DS.Radius.concentric(inside: DS.Radius.panel, gap: gap)
     }
 
     private var buttonHeight: CGFloat {
