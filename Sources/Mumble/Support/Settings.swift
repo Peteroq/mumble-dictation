@@ -1,3 +1,4 @@
+import MumbleCleanup
 import Foundation
 import Observation
 
@@ -54,6 +55,15 @@ final class Settings {
         didSet { defaults.set(engine.rawValue, forKey: Keys.engine) }
     }
 
+    /// The input device Mumble records from, by UID, or nil to follow the system default.
+    ///
+    /// A pin exists for calls: FaceTime or Zoom takes the headset and moves the system
+    /// default around, and dictation should keep working on the laptop mic rather than
+    /// following whatever the call did.
+    var inputDeviceUID: String? {
+        didSet { defaults.set(inputDeviceUID, forKey: Keys.inputDeviceUID) }
+    }
+
     /// Run every engine on each recording and show them side by side, instead of
     /// transcribing with one. Nothing is typed into the focused app in this mode.
     var compareMode: Bool {
@@ -71,6 +81,11 @@ final class Settings {
         didSet { defaults.set(cleanupTier.rawValue, forKey: Keys.cleanupTier) }
     }
 
+    /// How far the cleanup pass may go — punctuation only, through to repairing grammar.
+    var cleanupStrength: CleanupStrength {
+        didSet { defaults.set(cleanupStrength.rawValue, forKey: Keys.cleanupStrength) }
+    }
+
     /// Play a short tick when capture starts and stops.
     var soundEnabled: Bool {
         didSet { defaults.set(soundEnabled, forKey: Keys.soundEnabled) }
@@ -84,7 +99,9 @@ final class Settings {
         static let soundEnabled = "soundEnabled"
         static let engine = "engine"
         static let cleanupTier = "cleanupTier"
+        static let cleanupStrength = "cleanupStrength"
         static let compareMode = "compareMode"
+        static let inputDeviceUID = "inputDeviceUID"
     }
 
     private init() {
@@ -94,7 +111,12 @@ final class Settings {
         engine = SpeechEngineChoice(rawValue: defaults.string(forKey: Keys.engine) ?? "") ?? .apple
         cleanupEnabled = defaults.object(forKey: Keys.cleanupEnabled) as? Bool ?? true
         cleanupTier = CleanupTier(rawValue: defaults.string(forKey: Keys.cleanupTier) ?? "") ?? .rules
+        // Standard by default: it is what cleanup did before this setting existed, so an
+        // upgrade does not quietly change what lands in anyone's documents.
+        cleanupStrength = CleanupStrength(rawValue: defaults.string(forKey: Keys.cleanupStrength) ?? "")
+            ?? .standard
         compareMode = defaults.object(forKey: Keys.compareMode) as? Bool ?? false
+        inputDeviceUID = defaults.string(forKey: Keys.inputDeviceUID)
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true
     }
 }

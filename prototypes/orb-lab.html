@@ -1,0 +1,1435 @@
+<title>Mumble Orb Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=Azeret+Mono:wght@400;500&display=swap">
+
+<style>
+/* Single-theme by commitment: the orb is an additive point cloud that only reads on a
+   near-black ground, and the HUD it is destined for is always a dark surface. Every colour
+   below is painted explicitly so the page holds on either host ground. */
+:root {
+  --void:      #05060A;
+  --panel:     #0D1017;
+  --panel-up:  #12161F;
+  --seam:      #1B2029;
+  --ink:       #E8ECF2;
+  --ink-dim:   #79828F;
+  --ink-faint: #49515C;
+  --lime:      #C7F24A;
+  --violet:    #A895FF;
+
+  --step-0: 0.75rem;
+  --step-1: 0.8125rem;
+  --step-2: 0.9375rem;
+  --step-3: 1.25rem;
+
+  --rail: 310px;
+  --r-sm: 10px;
+  --r-md: 16px;
+  --r-lg: 22px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--void);
+  color: var(--ink);
+  font-family: "Familjen Grotesk", ui-sans-serif, system-ui, sans-serif;
+  font-size: var(--step-2);
+  line-height: 1.45;
+  overflow: hidden;
+}
+
+/* ---------- Stage ---------- */
+
+#stage { position: fixed; inset: 0 calc(var(--rail) + 36px) 0 0; display: grid; place-items: center; }
+#gl { display: block; width: 100%; height: 100%; cursor: grab; }
+#gl:active { cursor: grabbing; }
+/* A preset sets width and height in pixels inline; the ring is drawn outside the canvas so it
+   marks the edge without appearing in anything the pipeline renders. */
+#gl[data-sized="true"] { outline: 1px solid var(--seam); outline-offset: 12px; }
+#gl[data-capsule="true"] { border-radius: 999px; outline-offset: 12px; }
+
+#fallback {
+  position: fixed; inset: 0;
+  display: none;
+  place-content: center;
+  padding: 2rem;
+  text-align: center;
+}
+#fallback p { max-width: 44ch; margin: 0 auto; color: var(--ink-dim); }
+
+/* ---------- Rail ---------- */
+
+#rail {
+  position: fixed;
+  top: 18px; right: 18px; bottom: 18px;
+  width: var(--rail);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 20px;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--seam);
+  border-radius: var(--r-lg);
+  z-index: 2;
+}
+
+#rail::-webkit-scrollbar { width: 8px; }
+#rail::-webkit-scrollbar-thumb { background: var(--seam); border-radius: 99px; }
+
+.masthead { display: flex; flex-direction: column; gap: 4px; padding-bottom: 18px; }
+.masthead h1 {
+  margin: 0;
+  font-size: var(--step-3);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+.masthead p { margin: 0; font-size: var(--step-1); color: var(--ink-dim); }
+
+/* Groups are named for the three stages the shader actually runs, in order. */
+.group { display: flex; flex-direction: column; gap: 14px; padding: 18px 0; border-top: 1px solid var(--seam); }
+.group > h2 {
+  margin: 0;
+  font-size: var(--step-0);
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.field { display: flex; flex-direction: column; gap: 7px; }
+.field > .row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.field label { font-size: var(--step-1); color: var(--ink-dim); }
+.field output {
+  font-family: "Azeret Mono", ui-monospace, monospace;
+  font-size: var(--step-0);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 3px; margin: 5px 0;
+  background: var(--seam);
+  border-radius: 99px;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 15px; height: 15px;
+  background: var(--lime);
+  border: none; border-radius: 50%;
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 15px; height: 15px;
+  background: var(--lime);
+  border: none; border-radius: 50%;
+  cursor: pointer;
+}
+input[type="range"]:focus-visible { outline: 2px solid var(--lime); outline-offset: 5px; }
+
+.seg { display: flex; gap: 5px; }
+.seg button {
+  flex: 1;
+  padding: 8px 4px;
+  font-family: inherit;
+  font-size: var(--step-0);
+  font-weight: 500;
+  color: var(--ink-dim);
+  background: var(--panel-up);
+  border: 1px solid var(--seam);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] {
+  color: var(--void);
+  background: var(--lime);
+  border-color: var(--lime);
+}
+.seg button:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+
+.note { margin: 0; font-size: var(--step-0); line-height: 1.5; color: var(--ink-faint); }
+.note[data-tone="warn"] { color: var(--violet); }
+
+/* ---------- Export ---------- */
+
+.export { display: flex; flex-direction: column; gap: 10px; }
+.export pre {
+  margin: 0;
+  padding: 12px;
+  max-height: 190px;
+  overflow: auto;
+  font-family: "Azeret Mono", ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  background: var(--void);
+  border: 1px solid var(--seam);
+  border-radius: var(--r-sm);
+  tab-size: 2;
+}
+.export pre::-webkit-scrollbar { width: 8px; height: 8px; }
+.export pre::-webkit-scrollbar-thumb { background: var(--seam); border-radius: 99px; }
+
+button.wide {
+  width: 100%;
+  padding: 10px;
+  font-family: inherit;
+  font-size: var(--step-1);
+  font-weight: 600;
+  color: var(--void);
+  background: var(--ink);
+  border: none;
+  border-radius: 99px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+button.wide:hover { background: var(--lime); }
+button.wide:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+
+/* ---------- Status strip ---------- */
+
+#status {
+  position: fixed;
+  left: 18px; bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 11px 18px;
+  font-family: "Azeret Mono", ui-monospace, monospace;
+  font-size: var(--step-0);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--seam);
+  border-radius: 99px;
+  z-index: 2;
+}
+#status b { font-weight: 500; color: var(--ink); }
+#status .div { width: 1px; height: 14px; background: var(--seam); }
+
+#levelTrack {
+  position: relative;
+  width: 88px; height: 3px;
+  background: var(--seam);
+  border-radius: 99px;
+  overflow: hidden;
+}
+#levelFill {
+  position: absolute; inset: 0;
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--lime), var(--violet));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 1ms !important; }
+}
+
+@media (max-width: 820px) {
+  :root { --rail: auto; }
+  body { overflow: auto; }
+  #stage { position: relative; inset: auto; height: 58vh; }
+  #rail {
+    position: relative;
+    inset: auto;
+    width: auto;
+    margin: 14px;
+    max-height: none;
+  }
+  #status { position: relative; left: auto; bottom: auto; margin: 0 14px 14px; flex-wrap: wrap; border-radius: var(--r-md); }
+}
+</style>
+
+<div id="stage"><canvas id="gl"></canvas></div>
+
+<div id="fallback">
+  <p>This prototype needs WebGL2, which this browser did not provide. Everything else on the
+  page is inert without it.</p>
+</div>
+
+<aside id="rail">
+  <div class="masthead">
+    <h1>Orb Lab</h1>
+    <p>A voice-reactive point cloud, for the dictation HUD.</p>
+  </div>
+
+  <section class="group">
+    <h2>Frame</h2>
+    <div class="field">
+      <div class="row"><label id="sizeLabel">Render size</label></div>
+      <div class="seg" role="group" aria-labelledby="sizeLabel">
+        <button type="button" data-size="full" aria-pressed="true">Full</button>
+        <button type="button" data-size="pill" aria-pressed="false">Pill</button>
+        <button type="button" data-size="orb" aria-pressed="false">Orb</button>
+        <button type="button" data-size="slot" aria-pressed="false">Slot</button>
+      </div>
+      <p class="note" id="sizeNote">Fills the window. The two presets are real numbers from
+      <code>HUDMetrics</code>: Pill is the 340&times;76 capsule, Slot is the 84&times;32 the
+      waveform occupies inside it.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="zoom">Zoom</label><output for="zoom" id="zoomOut">1.00&times;</output></div>
+      <input type="range" id="zoom" min="0.2" max="6" step="0.01" value="1">
+      <p class="note">Scroll on the orb to zoom, drag to turn.</p>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Drive</h2>
+    <div class="field">
+      <div class="row"><label id="sourceLabel">Level source</label></div>
+      <div class="seg" role="group" aria-labelledby="sourceLabel">
+        <button type="button" data-source="sim" aria-pressed="true">Speech</button>
+        <button type="button" data-source="mic" aria-pressed="false">Microphone</button>
+        <button type="button" data-source="manual" aria-pressed="false">Manual</button>
+      </div>
+      <p class="note" id="sourceNote">A synthetic speech envelope — syllables at about 4&nbsp;Hz, with pauses for breath.</p>
+    </div>
+    <div class="field" id="manualField" hidden>
+      <div class="row"><label for="manual">Held level</label><output for="manual" id="manualOut">0.60</output></div>
+      <input type="range" id="manual" min="0" max="1" step="0.01" value="0.6">
+    </div>
+    <div class="field">
+      <div class="row"><label for="reactivity">Reactivity</label><output for="reactivity" id="reactivityOut">0.74</output></div>
+      <input type="range" id="reactivity" min="0" max="1" step="0.01" value="0.74">
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Form</h2>
+    <div class="field">
+      <div class="row"><label for="noiseScale">Noise scale</label><output for="noiseScale" id="noiseScaleOut">2.57</output></div>
+      <input type="range" id="noiseScale" min="0.4" max="4" step="0.01" value="2.57">
+    </div>
+    <div class="field">
+      <div class="row"><label for="amplitude">Amplitude</label><output for="amplitude" id="amplitudeOut">0.33</output></div>
+      <input type="range" id="amplitude" min="0" max="0.9" step="0.002" value="0.334">
+    </div>
+    <div class="field">
+      <div class="row"><label for="flow">Flow</label><output for="flow" id="flowOut">0.28</output></div>
+      <input type="range" id="flow" min="0" max="1.2" step="0.01" value="0.28">
+    </div>
+    <div class="field">
+      <div class="row"><label for="octaves">Octaves</label><output for="octaves" id="octavesOut">3</output></div>
+      <input type="range" id="octaves" min="1" max="4" step="1" value="3">
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Cloud</h2>
+    <div class="field">
+      <div class="row"><label for="density">Density</label><output for="density" id="densityOut">95 &times; 57</output></div>
+      <input type="range" id="density" min="12" max="240" step="1" value="95">
+    </div>
+    <div class="field">
+      <div class="row"><label for="dotSize">Dot size</label><output for="dotSize" id="dotSizeOut">0.75</output></div>
+      <input type="range" id="dotSize" min="0.1" max="3" step="0.01" value="0.75">
+    </div>
+    <div class="field">
+      <div class="row"><label for="rim">Rim boost</label><output for="rim" id="rimOut">1.00</output></div>
+      <input type="range" id="rim" min="0" max="3" step="0.02" value="1">
+    </div>
+    <div class="field">
+      <div class="row"><label for="gain">Gain</label><output for="gain" id="gainOut">0.56</output></div>
+      <input type="range" id="gain" min="0.2" max="5" step="0.01" value="0.56">
+      <p class="note">How far the brightest points push past white. Nothing blooms until something clips.</p>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Atmosphere</h2>
+    <div class="field">
+      <div class="row"><label for="haze">Haze</label><output for="haze" id="hazeOut">1.79</output></div>
+      <input type="range" id="haze" min="0" max="2" step="0.01" value="1.79">
+      <p class="note">A second cloud of wide soft sprites filling the volume, riding the same displacement — the fog clings to the form instead of sitting behind it.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="cloudDepth">Cloud depth</label><output for="cloudDepth" id="cloudDepthOut">0.72</output></div>
+      <input type="range" id="cloudDepth" min="0.3" max="1.1" step="0.01" value="0.72">
+      <p class="note">Where the cloud stops, as a fraction of the shell the dots sit on. Below&nbsp;1 the dots stay outside it; at&nbsp;1 the two merge.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="bloom">Bloom</label><output for="bloom" id="bloomOut">0.96</output></div>
+      <input type="range" id="bloom" min="0" max="2.5" step="0.01" value="0.96">
+    </div>
+    <div class="field">
+      <div class="row"><label for="bloomRadius">Bloom spread</label><output for="bloomRadius" id="bloomRadiusOut">0.0120</output></div>
+      <input type="range" id="bloomRadius" min="0.0004" max="0.012" step="0.0001" value="0.012">
+    </div>
+    <div class="field">
+      <div class="row"><label for="dispersion">Dispersion</label><output for="dispersion" id="dispersionOut">0.0058</output></div>
+      <input type="range" id="dispersion" min="0" max="0.02" step="0.0002" value="0.0058">
+      <p class="note">Splits the halo into its channels radially, the way a prism fringes a blown highlight. The dots stay sharp — only the glow separates.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="grain">Film grain</label><output for="grain" id="grainOut">0.200</output></div>
+      <input type="range" id="grain" min="0" max="0.2" step="0.001" value="0.2">
+    </div>
+    <div class="field">
+      <div class="row"><label for="exposure">Exposure</label><output for="exposure" id="exposureOut">0.99</output></div>
+      <input type="range" id="exposure" min="0.3" max="3" step="0.01" value="0.99">
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Colour</h2>
+    <div class="field">
+      <div class="row"><label id="paletteLabel">Gradient</label></div>
+      <div class="seg" role="group" aria-labelledby="paletteLabel">
+        <button type="button" data-palette="prism" aria-pressed="true">Prism</button>
+        <button type="button" data-palette="reference" aria-pressed="false">Dots</button>
+        <button type="button" data-palette="mumble" aria-pressed="false">Mumble</button>
+      </div>
+      <p class="note" id="paletteNote">Peach through pink to lavender, from the glowing ring. Three stops, not two — the warm midpoint is what stops it reading as a plain blue-to-purple ramp.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="spread">Hue spread</label><output for="spread" id="spreadOut">1.20</output></div>
+      <input type="range" id="spread" min="0.3" max="2.2" step="0.01" value="1.2">
+      <p class="note">How far around the form the ramp travels. Low keeps it near the first stop; high reaches the third one on the turning edges.</p>
+    </div>
+  </section>
+
+  <section class="group export">
+    <h2>Port to Metal</h2>
+    <p class="note">Everything the pipeline is running right now, in draw order. The displacement and the
+    post chain both transliterate to MSL; only the noise function needs hand-carrying.</p>
+    <pre id="exportBlock" tabindex="0"></pre>
+    <button type="button" class="wide" id="copyBtn">Copy parameters</button>
+  </section>
+</aside>
+
+<div id="status">
+  <span>Level <b id="levelOut">0.00</b></span>
+  <div id="levelTrack"><div id="levelFill"></div></div>
+  <div class="div"></div>
+  <span><b id="pointsOut">0</b> points</span>
+  <div class="div"></div>
+  <span><b id="resOut">0&times;0</b></span>
+  <div class="div"></div>
+  <span><b id="fpsOut">60</b> fps</span>
+</div>
+
+<script>
+"use strict";
+
+const canvas = document.getElementById("gl");
+const gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
+
+if (!gl) {
+  document.getElementById("stage").style.display = "none";
+  document.getElementById("rail").style.display = "none";
+  document.getElementById("status").style.display = "none";
+  document.getElementById("fallback").style.display = "grid";
+  throw new Error("WebGL2 unavailable");
+}
+
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* Half-float targets are what make bloom mean anything: the scene has to be allowed to hold
+   values above 1.0 so the threshold pass has something to separate. Without the extension the
+   buffer clamps at white and the glow flattens, so the page says so rather than looking
+   quietly wrong. */
+const floatOK = !!gl.getExtension("EXT_color_buffer_float");
+const TARGET_FORMAT = floatOK ? gl.RGBA16F : gl.RGBA8;
+const TARGET_TYPE = floatOK ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+
+/* ------------------------------------------------------------------ shader plumbing */
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(shader) || "compile failed");
+  }
+  return shader;
+}
+
+function link(vertexSource, fragmentSource) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(program) || "link failed");
+  }
+  const uniforms = {};
+  const count = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < count; i++) {
+    const name = gl.getActiveUniform(program, i).name.replace("[0]", "");
+    uniforms[name] = gl.getUniformLocation(program, name);
+  }
+  return { program, u: uniforms };
+}
+
+/* Ashima's simplex noise (webgl-noise, MIT — (C) 2011 Ashima Arts / Stefan Gustavson).
+   No uniform arrays and no sampler, which is what keeps the Metal port a transliteration. */
+const NOISE_GLSL = `
+vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
+vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+float snoise(vec3 v) {
+  const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+
+  vec3 i  = floor(v + dot(v, C.yyy));
+  vec3 x0 = v - i + dot(i, C.xxx);
+
+  vec3 g = step(x0.yzx, x0.xyz);
+  vec3 l = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+
+  vec3 x1 = x0 - i1 + C.xxx;
+  vec3 x2 = x0 - i2 + C.yyy;
+  vec3 x3 = x0 - D.yyy;
+
+  i = mod289(i);
+  vec4 p = permute(permute(permute(
+             i.z + vec4(0.0, i1.z, i2.z, 1.0))
+           + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+           + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+
+  float n_ = 0.142857142857;
+  vec3 ns = n_ * D.wyz - D.xzx;
+
+  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+
+  vec4 x_ = floor(j * ns.z);
+  vec4 y_ = floor(j - 7.0 * x_);
+
+  vec4 x = x_ * ns.x + ns.yyyy;
+  vec4 y = y_ * ns.x + ns.yyyy;
+  vec4 h = 1.0 - abs(x) - abs(y);
+
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+
+  vec4 s0 = floor(b0) * 2.0 + 1.0;
+  vec4 s1 = floor(b1) * 2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+
+  vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+
+  vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+
+  vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+  m = m * m;
+  return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
+}
+`;
+
+/* ------------------------------------------------------------------ orb program */
+
+const ORB_VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in float aSeed;
+
+uniform mat4 uProjection;
+uniform mat3 uRotation;
+uniform float uTime;
+uniform float uLevel;
+uniform float uReactivity;
+uniform float uNoiseScale;
+uniform float uAmplitude;
+uniform float uFlow;
+uniform int uOctaves;
+uniform float uDotSize;
+uniform float uRim;
+uniform float uPixelRatio;
+uniform float uCameraZ;
+uniform float uSpread;    // how much of the three-stop ramp the form covers
+uniform float uHazeAlpha; // per-sprite, already normalised for the sprite count
+uniform float uHaze;      // 0 for the crisp pass, >0 for the soft pass
+uniform float uIsHaze;
+
+out float vShade;
+out float vAlpha;
+out float vSoft;
+
+${NOISE_GLSL}
+
+float fbm(vec3 p, int octaves) {
+  float sum = 0.0, amp = 1.0, freq = 1.0, norm = 0.0;
+  for (int i = 0; i < 4; i++) {
+    if (i >= octaves) break;
+    sum += snoise(p * freq) * amp;
+    norm += amp;
+    freq *= 2.0;
+    amp *= 0.5;
+  }
+  return sum / max(norm, 0.0001);
+}
+
+void main() {
+  vec3 p = normalize(aPosition);
+  float shell = length(aPosition);
+
+  float drive = mix(1.0 - uReactivity, 1.0, clamp(uLevel, 0.0, 1.0));
+  float n = fbm(p * uNoiseScale + vec3(0.0, 0.0, uTime * uFlow), uOctaves);
+  float disp = n * uAmplitude * drive;
+
+  // Radius preserved, so an interior point stays interior. The displacement is still sampled
+  // by direction alone, which keeps the inner cloud deforming in step with the outer shell
+  // rather than churning independently inside it.
+  vec3 displaced = p * shell * (1.0 + disp);
+  vec3 world = uRotation * displaced;
+
+  vec4 mv = vec4(world, 1.0);
+  mv.z -= uCameraZ;
+  gl_Position = uProjection * mv;
+
+  vec3 normalWorld = normalize(uRotation * p);
+  float rim = pow(1.0 - abs(normalWorld.z), 2.0);
+
+  // The haze pass is the same cloud blown up and dimmed. Riding the identical displacement is
+  // the whole point — fog rendered as a separate volume sits behind the form instead of in it.
+  float sizeScale = mix(1.0, 13.0 * uHaze + 4.0, uIsHaze);
+  float size = uDotSize * (1.0 + rim * uRim * 0.5) * (0.85 + 0.3 * aSeed) * sizeScale;
+  gl_PointSize = size * uPixelRatio * (uCameraZ / -mv.z);
+
+  float depth = clamp((world.z + 1.5) / 3.0, 0.0, 1.0);
+
+  float sweep = dot(normalWorld, normalize(vec3(0.85, 0.62, 0.3))) * 0.5 + 0.5;
+  vShade = clamp((1.0 - sweep - 0.08) * uSpread + disp * 1.1, 0.0, 1.0);
+
+  float base = mix(0.5, 1.0, depth) * (1.0 + rim * uRim * 0.65) * (0.66 + 0.34 * drive);
+  float hazeAlpha = mix(0.72, 1.0, depth) * (0.66 + 0.34 * drive) * uHazeAlpha;
+  vAlpha = mix(base, hazeAlpha, uIsHaze);
+  vSoft = uIsHaze;
+}
+`;
+
+const ORB_FRAG = `#version 300 es
+precision highp float;
+
+in float vShade;
+in float vAlpha;
+in float vSoft;
+
+uniform vec3 uColorA;
+uniform vec3 uColorB;
+uniform vec3 uColorC;
+uniform float uGain;
+
+out vec4 fragColor;
+
+/* Three stops rather than two. A straight A-to-B ramp cannot hold a warm midpoint, which is
+   exactly what separates the reference's peach-through-pink from a plain blue-to-purple. */
+vec3 ramp(float t) {
+  return t < 0.5 ? mix(uColorA, uColorB, t * 2.0)
+                 : mix(uColorB, uColorC, (t - 0.5) * 2.0);
+}
+
+void main() {
+  vec2 uv = gl_PointCoord * 2.0 - 1.0;
+  float d = dot(uv, uv);
+
+  // Crisp pass gets a tight disc; the haze pass gets a wide gaussian falloff with no edge at
+  // all, so overlapping sprites accumulate into fog rather than reading as visible blobs.
+  float mask = mix(smoothstep(1.0, 0.35, d), exp(-d * 3.4), vSoft);
+  if (mask <= 0.002) discard;
+
+  vec3 color = ramp(vShade) * uGain;
+  fragColor = vec4(color, mask * vAlpha);
+}
+`;
+
+const orb = link(ORB_VERT, ORB_FRAG);
+
+/* ------------------------------------------------------------------ post programs */
+
+/* Fullscreen coverage from vertex ids alone — no buffer, no attribute, no VAO contents. */
+const QUAD_VERT = `#version 300 es
+precision highp float;
+out vec2 vUv;
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  vUv = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+`;
+
+const LUMA = `float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }`;
+
+/* Soft-knee threshold. A hard cutoff makes the bloom pop on and off as the orb breathes past
+   it; the knee lets brightness ramp into the glow instead. */
+const PREFILTER_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uScene;
+uniform float uThreshold;
+uniform float uKnee;
+out vec4 fragColor;
+void main() {
+  vec3 c = texture(uScene, vUv).rgb;
+  float br = max(c.r, max(c.g, c.b));
+  float knee = max(uThreshold * uKnee, 0.0001);
+  float soft = clamp(br - uThreshold + knee, 0.0, 2.0 * knee);
+  soft = soft * soft / (4.0 * knee);
+  float contribution = max(soft, br - uThreshold) / max(br, 0.0001);
+  fragColor = vec4(c * contribution, 1.0);
+}
+`;
+
+/* 13-tap downsample, Call of Duty / LearnOpenGL weights. The Karis average runs on the first
+   level only: that is the one sampling raw unclamped scene values, where a single blown point
+   would otherwise drag the whole glow around as it moves. */
+const DOWN_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uSrc;
+uniform vec2 uTexel;
+uniform float uKaris;
+out vec4 fragColor;
+${LUMA}
+vec3 fetch(vec2 offset) { return texture(uSrc, vUv + offset * uTexel).rgb; }
+vec3 karis(vec3 a, vec3 b, vec3 c, vec3 d) {
+  float wa = 1.0 / (1.0 + luma(a));
+  float wb = 1.0 / (1.0 + luma(b));
+  float wc = 1.0 / (1.0 + luma(c));
+  float wd = 1.0 / (1.0 + luma(d));
+  return (a * wa + b * wb + c * wc + d * wd) / max(wa + wb + wc + wd, 0.0001);
+}
+void main() {
+  vec3 a = fetch(vec2(-2.0,  2.0)), b = fetch(vec2(0.0,  2.0)), c = fetch(vec2(2.0,  2.0));
+  vec3 d = fetch(vec2(-2.0,  0.0)), e = fetch(vec2(0.0,  0.0)), f = fetch(vec2(2.0,  0.0));
+  vec3 g = fetch(vec2(-2.0, -2.0)), h = fetch(vec2(0.0, -2.0)), i = fetch(vec2(2.0, -2.0));
+  vec3 j = fetch(vec2(-1.0,  1.0)), k = fetch(vec2(1.0,  1.0));
+  vec3 l = fetch(vec2(-1.0, -1.0)), m = fetch(vec2(1.0, -1.0));
+
+  vec3 result;
+  if (uKaris > 0.5) {
+    result  = karis(j, k, l, m) * 0.5;
+    result += karis(a, b, d, e) * 0.125;
+    result += karis(b, c, e, f) * 0.125;
+    result += karis(d, e, g, h) * 0.125;
+    result += karis(e, f, h, i) * 0.125;
+  } else {
+    result  = e * 0.125;
+    result += (a + c + g + i) * 0.03125;
+    result += (b + d + f + h) * 0.0625;
+    result += (j + k + l + m) * 0.125;
+  }
+  fragColor = vec4(result, 1.0);
+}
+`;
+
+/* 9-tap tent upsample, blended additively back down the chain. The widening radius per level
+   is where the very broad, very soft outer haze comes from. */
+const UP_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uSrc;
+uniform float uRadius;
+out vec4 fragColor;
+vec3 fetch(vec2 offset) { return texture(uSrc, vUv + offset * uRadius).rgb; }
+void main() {
+  vec3 a = fetch(vec2(-1.0,  1.0)), b = fetch(vec2(0.0,  1.0)), c = fetch(vec2(1.0,  1.0));
+  vec3 d = fetch(vec2(-1.0,  0.0)), e = fetch(vec2(0.0,  0.0)), f = fetch(vec2(1.0,  0.0));
+  vec3 g = fetch(vec2(-1.0, -1.0)), h = fetch(vec2(0.0, -1.0)), i = fetch(vec2(1.0, -1.0));
+  vec3 result = e * 4.0 + (b + d + f + h) * 2.0 + (a + c + g + i);
+  fragColor = vec4(result / 16.0, 1.0);
+}
+`;
+
+const COMPOSITE_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uScene;
+uniform sampler2D uBloom;
+uniform vec2 uResolution;
+uniform float uBloomStrength;
+uniform float uDispersion;
+uniform float uGrain;
+uniform float uExposure;
+uniform float uSeed;
+out vec4 fragColor;
+${LUMA}
+
+/* ACES filmic approximation. The hot core has to roll off to white rather than clipping to a
+   flat colour plateau — that roll-off is most of what reads as "glowing" in the reference. */
+vec3 aces(vec3 x) {
+  const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+void main() {
+  vec3 scene = texture(uScene, vUv).rgb;
+
+  // Radial dispersion, applied to the halo alone. Offsetting the sharp scene as well would
+  // read as a lens fault; offsetting only the glow reads as a prism, which is the reference.
+  vec2 dir = vUv - 0.5;
+  float r = length(dir);
+  vec2 offset = dir * uDispersion * (0.25 + r * 1.4);
+  vec3 bloom = vec3(
+    texture(uBloom, vUv + offset).r,
+    texture(uBloom, vUv).g,
+    texture(uBloom, vUv - offset).b
+  );
+
+  vec3 color = aces((scene + bloom * uBloomStrength) * uExposure);
+
+  // Grain after the tone map, weighted toward the midtones. Uniform grain flattens the
+  // blacks into static and speckles the highlights; film does neither.
+  float shape = 1.0 - abs(luma(color) * 2.0 - 1.0);
+  float g = hash(vUv * uResolution + uSeed) - 0.5;
+  color += g * uGrain * (0.22 + 0.78 * shape);
+
+  color *= 1.0 - 0.3 * pow(clamp(r * 1.35, 0.0, 1.0), 2.4);
+  fragColor = vec4(max(color, 0.0), 1.0);
+}
+`;
+
+const prefilter = link(QUAD_VERT, PREFILTER_FRAG);
+const downsample = link(QUAD_VERT, DOWN_FRAG);
+const upsample = link(QUAD_VERT, UP_FRAG);
+const composite = link(QUAD_VERT, COMPOSITE_FRAG);
+
+const emptyVAO = gl.createVertexArray();
+function drawQuad() {
+  gl.bindVertexArray(emptyVAO);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* ------------------------------------------------------------------ render targets */
+
+function makeTarget(width, height) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, TARGET_FORMAT, width, height, 0, gl.RGBA, TARGET_TYPE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { texture, framebuffer, width, height };
+}
+
+const BLOOM_LEVELS = 6;
+let scene = null;
+let chain = [];
+
+function releaseTargets() {
+  for (const target of [scene, ...chain]) {
+    if (!target) continue;
+    gl.deleteTexture(target.texture);
+    gl.deleteFramebuffer(target.framebuffer);
+  }
+  scene = null;
+  chain = [];
+}
+
+function buildTargets(width, height) {
+  releaseTargets();
+  scene = makeTarget(width, height);
+  let w = width, h = height;
+  for (let i = 0; i < BLOOM_LEVELS; i++) {
+    w = Math.max(2, w >> 1);
+    h = Math.max(2, h >> 1);
+    chain.push(makeTarget(w, h));
+  }
+}
+
+/* ------------------------------------------------------------------ geometry */
+
+function makeCloud(build) {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const positions = [];
+  const seeds = [];
+  build((x, y, z) => { positions.push(x, y, z); seeds.push(Math.random()); });
+
+  const positionBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+
+  const seedBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, seedBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(seeds), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 0, 0);
+
+  gl.bindVertexArray(null);
+  return { vao, count: positions.length / 3, positionBuffer, seedBuffer };
+}
+
+let dots = null;
+
+/* Lat/long lattice, not an even distribution: the converging rows are the signature of the
+   dotted reference. Ring population scales with circumference so the poles do not saturate. */
+function buildDots(segments) {
+  if (dots) {
+    gl.deleteVertexArray(dots.vao);
+    gl.deleteBuffer(dots.positionBuffer);
+    gl.deleteBuffer(dots.seedBuffer);
+  }
+  const rings = Math.max(8, Math.round(segments * 0.6));
+  dots = makeCloud((push) => {
+    push(0, 1, 0);
+    for (let iy = 1; iy < rings; iy++) {
+      const phi = (iy / rings) * Math.PI;
+      const sinPhi = Math.sin(phi);
+      const cosPhi = Math.cos(phi);
+      const ringCount = Math.max(3, Math.round(segments * sinPhi));
+      for (let ix = 0; ix < ringCount; ix++) {
+        const theta = (ix / ringCount) * Math.PI * 2;
+        push(sinPhi * Math.cos(theta), cosPhi, sinPhi * Math.sin(theta));
+      }
+    }
+    push(0, -1, 0);
+  });
+}
+
+let haze = null;
+
+/* The haze fills a volume under the dot shell rather than sitting on it — that separation is
+   what reads as substance inside a cage of points rather than fog smeared over them.
+   Directions come off a Fibonacci spiral, not the lattice: wide soft sprites on a lattice
+   re-draw the grid as a moiré, where scattered ones just accumulate.
+
+   Radii are jittered with a power below 1/3. A true uniform-by-volume fill (cube root) piles
+   most of the mass right under the surface, which looks like a second shell; pulling it inward
+   is what makes the middle read as full. */
+const HAZE_COUNT = 2600;
+
+function buildHaze(depth) {
+  if (haze) {
+    gl.deleteVertexArray(haze.vao);
+    gl.deleteBuffer(haze.positionBuffer);
+    gl.deleteBuffer(haze.seedBuffer);
+  }
+  const inner = depth * 0.12;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  haze = makeCloud((push) => {
+    for (let i = 0; i < HAZE_COUNT; i++) {
+      const y = 1 - (i / (HAZE_COUNT - 1)) * 2;
+      const radius = Math.sqrt(Math.max(0, 1 - y * y));
+      const theta = golden * i;
+      const shell = inner + (depth - inner) * Math.pow(Math.random(), 0.55);
+      push(Math.cos(theta) * radius * shell, y * shell, Math.sin(theta) * radius * shell);
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ maths */
+
+function perspective(fovY, aspect, near, far) {
+  const f = 1 / Math.tan(fovY / 2);
+  const nf = 1 / (near - far);
+  return new Float32Array([
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far + near) * nf, -1,
+    0, 0, 2 * far * near * nf, 0,
+  ]);
+}
+
+function rotationMatrix(yaw, pitch) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  return new Float32Array([
+    cy, sy * sp, -sy * cp,
+    0, cp, sp,
+    sy, -cy * sp, cy * cp,
+  ]);
+}
+
+/* ------------------------------------------------------------------ state */
+
+const PALETTES = {
+  prism: {
+    a: [1.0, 0.82, 0.68], b: [1.0, 0.44, 0.66], c: [0.62, 0.53, 1.0],
+    note: "Peach through pink to lavender, from the glowing ring. Three stops, not two — the warm midpoint is what stops it reading as a plain blue-to-purple ramp.",
+  },
+  reference: {
+    a: [0.32, 0.78, 1.0], b: [0.55, 0.62, 1.0], c: [0.78, 0.42, 1.0],
+    note: "Cyan through periwinkle to magenta — the first reference, the dotted one.",
+  },
+  mumble: {
+    a: [0.78, 0.95, 0.29], b: [0.49, 0.85, 0.78], c: [0.66, 0.58, 1.0],
+    note: "Lime through mint to violet. The outer stops are the two already in <code>Brand.gradient</code> in the HUD today.",
+  },
+};
+
+const state = {
+  source: "sim",
+  manual: 0.6,
+  reactivity: 0.74,
+  noiseScale: 2.57,
+  amplitude: 0.334,
+  flow: 0.28,
+  octaves: 3,
+  density: 95,
+  dotSize: 0.75,
+  rim: 1.0,
+  gain: 0.56,
+  haze: 1.79,
+  cloudDepth: 0.72,
+  bloom: 0.96,
+  bloomRadius: 0.012,
+  dispersion: 0.0058,
+  grain: 0.2,
+  exposure: 0.99,
+  spread: 1.2,
+  zoom: 1,
+  size: "full",
+  palette: "prism",
+};
+
+let level = 0;
+buildDots(state.density);
+buildHaze(state.cloudDepth);
+
+/* ------------------------------------------------------------------ level sources */
+
+function simulatedLevel(t) {
+  const phrase = Math.max(0, Math.sin(t * 0.34) * 0.62 + 0.34);
+  const syllable = (0.58 + 0.42 * Math.sin(t * 26.0)) * (0.72 + 0.28 * Math.sin(t * 61.0 + 1.3));
+  return Math.min(1, phrase * syllable * 1.15);
+}
+
+let analyser = null;
+let micData = null;
+let micError = "";
+
+async function startMic() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const context = new (window.AudioContext || window.webkitAudioContext)();
+    const source = context.createMediaStreamSource(stream);
+    analyser = context.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    micData = new Float32Array(analyser.fftSize);
+    micError = "";
+  } catch {
+    analyser = null;
+    micError = "The browser refused microphone access here. Open the page in its own tab and try again.";
+  }
+  renderSourceNote();
+}
+
+function micLevel() {
+  if (!analyser || !micData) return 0;
+  analyser.getFloatTimeDomainData(micData);
+  let sum = 0;
+  for (let i = 0; i < micData.length; i++) sum += micData[i] * micData[i];
+  const rms = Math.sqrt(sum / micData.length);
+  const db = 20 * Math.log10(Math.max(rms, 1e-7));
+  return Math.max(0, Math.min(1, (db + 50) / 50));
+}
+
+/* ------------------------------------------------------------------ controls */
+
+const el = (id) => document.getElementById(id);
+
+function bindSlider(id, key, format) {
+  const input = el(id);
+  const out = el(id + "Out");
+  const apply = () => {
+    const value = parseFloat(input.value);
+    state[key] = value;
+    out.innerHTML = format(value);
+    if (key === "density") buildDots(value);
+    if (key === "cloudDepth") buildHaze(value);
+    writeExport();
+  };
+  input.addEventListener("input", apply);
+  apply();
+}
+
+const fixed = (n) => (v) => v.toFixed(n);
+
+bindSlider("manual", "manual", fixed(2));
+bindSlider("reactivity", "reactivity", fixed(2));
+bindSlider("noiseScale", "noiseScale", fixed(2));
+bindSlider("amplitude", "amplitude", fixed(2));
+bindSlider("flow", "flow", fixed(2));
+bindSlider("octaves", "octaves", (v) => String(v));
+bindSlider("density", "density", (v) => `${v} &times; ${Math.max(8, Math.round(v * 0.6))}`);
+bindSlider("dotSize", "dotSize", fixed(2));
+bindSlider("rim", "rim", fixed(2));
+bindSlider("gain", "gain", fixed(2));
+bindSlider("spread", "spread", fixed(2));
+bindSlider("zoom", "zoom", (v) => v.toFixed(2) + "\u00d7");
+bindSlider("haze", "haze", fixed(2));
+bindSlider("cloudDepth", "cloudDepth", fixed(2));
+bindSlider("bloom", "bloom", fixed(2));
+bindSlider("bloomRadius", "bloomRadius", fixed(4));
+bindSlider("dispersion", "dispersion", fixed(4));
+bindSlider("grain", "grain", fixed(3));
+bindSlider("exposure", "exposure", fixed(2));
+
+function renderSourceNote() {
+  const note = el("sourceNote");
+  if (state.source === "sim") {
+    note.dataset.tone = "";
+    note.innerHTML = "A synthetic speech envelope — syllables at about 4&nbsp;Hz, with pauses for breath.";
+  } else if (state.source === "manual") {
+    note.dataset.tone = "";
+    note.textContent = "Held at a fixed level, for judging one amplitude at a time.";
+  } else if (micError) {
+    note.dataset.tone = "warn";
+    note.textContent = micError;
+  } else if (analyser) {
+    note.dataset.tone = "";
+    note.textContent = "Live from your microphone, mapped the same way the Swift capture maps it.";
+  } else {
+    note.dataset.tone = "";
+    note.textContent = "Asking for microphone access…";
+  }
+}
+
+document.querySelectorAll("[data-source]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.source = button.dataset.source;
+    document.querySelectorAll("[data-source]").forEach((other) => {
+      other.setAttribute("aria-pressed", String(other === button));
+    });
+    el("manualField").hidden = state.source !== "manual";
+    if (state.source === "mic" && !analyser) startMic();
+    renderSourceNote();
+  });
+});
+
+document.querySelectorAll("[data-palette]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.palette = button.dataset.palette;
+    document.querySelectorAll("[data-palette]").forEach((other) => {
+      other.setAttribute("aria-pressed", String(other === button));
+    });
+    el("paletteNote").innerHTML = PALETTES[state.palette].note;
+    writeExport();
+  });
+});
+
+function writeExport() {
+  const palette = PALETTES[state.palette];
+  const hex = (c) => "#" + c.map((v) => Math.round(Math.min(1, v) * 255).toString(16).padStart(2, "0")).join("");
+  el("exportBlock").textContent =
+`enum OrbParameters {
+  // Displacement
+  static let noiseScale: Float = ${state.noiseScale.toFixed(2)}
+  static let amplitude: Float = ${state.amplitude.toFixed(3)}
+  static let flow: Float = ${state.flow.toFixed(2)}
+  static let octaves = ${state.octaves}
+  static let reactivity: Float = ${state.reactivity.toFixed(2)}
+
+  // Point cloud
+  static let segments = ${state.density}
+  static let rings = ${Math.max(8, Math.round(state.density * 0.6))}
+  static let dotCount = ${dots ? dots.count : 0}
+  static let hazeCount = ${haze ? haze.count : 0}
+  static let dotSize: Float = ${state.dotSize.toFixed(2)}
+  static let rimBoost: Float = ${state.rim.toFixed(2)}
+  static let gain: Float = ${state.gain.toFixed(2)}
+  static let hueSpread: Float = ${state.spread.toFixed(2)}
+
+  // Post chain
+  static let haze: Float = ${state.haze.toFixed(2)}
+  static let cloudDepth: Float = ${state.cloudDepth.toFixed(2)}
+  static let bloom: Float = ${state.bloom.toFixed(2)}
+  static let bloomLevels = ${BLOOM_LEVELS}
+  static let bloomRadius: Float = ${state.bloomRadius.toFixed(4)}
+  static let dispersion: Float = ${state.dispersion.toFixed(4)}
+  static let grain: Float = ${state.grain.toFixed(3)}
+  static let exposure: Float = ${state.exposure.toFixed(2)}
+
+  // ${state.palette} ramp
+  static let colorA = ${hex(palette.a)}
+  static let colorB = ${hex(palette.b)}
+  static let colorC = ${hex(palette.c)}
+}`;
+}
+
+el("copyBtn").addEventListener("click", async () => {
+  const button = el("copyBtn");
+  try {
+    await navigator.clipboard.writeText(el("exportBlock").textContent);
+    button.textContent = "Copied";
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents(el("exportBlock"));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    button.textContent = "Selected — press ⌘C";
+  }
+  setTimeout(() => { button.textContent = "Copy parameters"; }, 1800);
+});
+
+/* ------------------------------------------------------------------ framing */
+
+/* Real numbers from HUDMetrics, not round ones. Judging the orb small means rendering it into
+   a small target, not dollying away from a large one: the bloom mip chain, the dot sizes and
+   the grain are all measured in pixels, so they only behave honestly at the true resolution. */
+/* The orb's native size. Four times the old distance, so what used to need a 0.25x zoom is
+   now simply what the orb is — and every pixel-measured control below is dialled for it,
+   which is what makes them editable at this scale instead of bunched at the bottom. */
+const BASE_CAMERA = 16.8;
+
+const SIZES = {
+  full: { width: null, height: null, capsule: false, zoom: 1,
+    note: "Fills the window. The two presets are real numbers from <code>HUDMetrics</code>: Pill is the 340&times;76 capsule, Slot is the 84&times;32 the waveform occupies inside it." },
+  pill: { width: 420, height: 112, capsule: true, zoom: 4.0,
+    note: "The HUD capsule at its new 420&times;112, corners and all. It will blow out at the full-size settings — dot size, bloom spread and grain are all in pixels, so they do not shrink with the frame. Pull <b>Density</b> and <b>Dot size</b> down until the lattice reappears." },
+  orb: { width: 96, height: 96, capsule: false, zoom: 4.6,
+    note: "96&times;96 &mdash; the square the orb gets at the left of the capsule. This is the size that decides whether the design survives contact with the HUD." },
+  slot: { width: 84, height: 32, capsule: false, zoom: 1.6,
+    note: "The 84&times;32 the waveform occupies today — what the orb inherits if it replaces it one for one. Expect to need a few hundred dots here, not fourteen thousand." },
+};
+
+function applySize(name) {
+  const preset = SIZES[name];
+  state.size = name;
+  if (preset.width) {
+    canvas.style.width = preset.width + "px";
+    canvas.style.height = preset.height + "px";
+    canvas.dataset.sized = "true";
+    canvas.dataset.capsule = preset.capsule ? "true" : "false";
+  } else {
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    delete canvas.dataset.sized;
+    delete canvas.dataset.capsule;
+  }
+  el("sizeNote").innerHTML = preset.note;
+  el("zoom").value = String(preset.zoom);
+  el("zoom").dispatchEvent(new Event("input"));
+}
+
+document.querySelectorAll("[data-size]").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll("[data-size]").forEach((other) => {
+      other.setAttribute("aria-pressed", String(other === button));
+    });
+    applySize(button.dataset.size);
+  });
+});
+
+/* ------------------------------------------------------------------ pointer */
+
+let yaw = 0.6;
+let pitch = -0.15;
+let dragging = false;
+let lastX = 0;
+let lastY = 0;
+
+canvas.addEventListener("pointerdown", (event) => {
+  dragging = true;
+  lastX = event.clientX;
+  lastY = event.clientY;
+  canvas.setPointerCapture(event.pointerId);
+});
+canvas.addEventListener("pointermove", (event) => {
+  if (!dragging) return;
+  yaw += (event.clientX - lastX) * 0.006;
+  pitch = Math.max(-1.3, Math.min(1.3, pitch + (event.clientY - lastY) * 0.006));
+  lastX = event.clientX;
+  lastY = event.clientY;
+});
+const endDrag = () => { dragging = false; };
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
+
+// Exponential so each notch is the same proportional step whichever end of the range you are
+// at. `passive: false` because the default action here is scrolling the page.
+canvas.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  const next = state.zoom * Math.exp(-event.deltaY * 0.0016);
+  const input = el("zoom");
+  input.value = String(Math.max(0.25, Math.min(4, next)));
+  input.dispatchEvent(new Event("input"));
+}, { passive: false });
+
+/* ------------------------------------------------------------------ loop */
+
+let pixelRatio = 1;
+
+function resize() {
+  pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(2, Math.round(canvas.clientWidth * pixelRatio));
+  const height = Math.max(2, Math.round(canvas.clientHeight * pixelRatio));
+  if (canvas.width === width && canvas.height === height && scene) return;
+  canvas.width = width;
+  canvas.height = height;
+  buildTargets(width, height);
+}
+
+function bindTarget(target) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.framebuffer : null);
+  const width = target ? target.width : canvas.width;
+  const height = target ? target.height : canvas.height;
+  gl.viewport(0, 0, width, height);
+}
+
+function useTexture(location, texture, unit) {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.uniform1i(location, unit);
+}
+
+let frames = 0;
+let fpsClock = 0;
+let previous = 0;
+
+function frame(now) {
+  const t = now / 1000;
+  const dt = previous ? Math.min(t - previous, 0.1) : 0.016;
+  previous = t;
+
+  resize();
+
+  let target;
+  if (state.source === "manual") target = state.manual;
+  else if (state.source === "mic") target = micLevel();
+  else target = reduceMotion ? 0.45 : simulatedLevel(t);
+  level += (target - level) * (1 - Math.exp(-dt * 14));
+
+  if (!dragging && !reduceMotion) yaw += dt * 0.12;
+
+  // ---- scene: haze first, then dots. Additive, so order is cosmetic, not correctness.
+  bindTarget(scene);
+  gl.clearColor(0, 0, 0, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.disable(gl.DEPTH_TEST);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+
+  gl.useProgram(orb.program);
+  const aspect = canvas.width / Math.max(canvas.height, 1);
+  gl.uniformMatrix4fv(orb.u.uProjection, false, perspective(0.72, aspect, 0.1, 40));
+  gl.uniformMatrix3fv(orb.u.uRotation, false, rotationMatrix(yaw, pitch));
+  gl.uniform1f(orb.u.uTime, reduceMotion ? 0 : t);
+  gl.uniform1f(orb.u.uLevel, level);
+  gl.uniform1f(orb.u.uReactivity, state.reactivity);
+  gl.uniform1f(orb.u.uNoiseScale, state.noiseScale);
+  gl.uniform1f(orb.u.uAmplitude, state.amplitude);
+  gl.uniform1f(orb.u.uFlow, state.flow);
+  gl.uniform1i(orb.u.uOctaves, state.octaves);
+  gl.uniform1f(orb.u.uDotSize, state.dotSize);
+  gl.uniform1f(orb.u.uRim, state.rim);
+  gl.uniform1f(orb.u.uPixelRatio, pixelRatio);
+  // Dolly rather than narrow the field of view: changing the fov would change the perspective
+  // on the displacement too, so the form itself would read differently at each zoom.
+  gl.uniform1f(orb.u.uCameraZ, BASE_CAMERA / state.zoom);
+  gl.uniform1f(orb.u.uSpread, state.spread);
+  gl.uniform1f(orb.u.uHaze, state.haze);
+  // Normalised against a 2,600-sprite reference cloud so density holds steady if the count moves.
+  gl.uniform1f(orb.u.uHazeAlpha, 0.013 * state.haze * (2600 / Math.max(haze.count, 1)));
+  gl.uniform1f(orb.u.uGain, state.gain);
+
+  const palette = PALETTES[state.palette];
+  gl.uniform3fv(orb.u.uColorA, palette.a);
+  gl.uniform3fv(orb.u.uColorB, palette.b);
+  gl.uniform3fv(orb.u.uColorC, palette.c);
+
+  if (state.haze > 0.001) {
+    gl.uniform1f(orb.u.uIsHaze, 1);
+    gl.bindVertexArray(haze.vao);
+    gl.drawArrays(gl.POINTS, 0, haze.count);
+  }
+
+  gl.uniform1f(orb.u.uIsHaze, 0);
+  gl.bindVertexArray(dots.vao);
+  gl.drawArrays(gl.POINTS, 0, dots.count);
+
+  // ---- bloom: threshold, down the chain, then additively back up.
+  gl.disable(gl.BLEND);
+  bindTarget(chain[0]);
+  gl.useProgram(prefilter.program);
+  useTexture(prefilter.u.uScene, scene.texture, 0);
+  gl.uniform1f(prefilter.u.uThreshold, 0.95);
+  gl.uniform1f(prefilter.u.uKnee, 0.6);
+  drawQuad();
+
+  gl.useProgram(downsample.program);
+  for (let i = 1; i < chain.length; i++) {
+    bindTarget(chain[i]);
+    useTexture(downsample.u.uSrc, chain[i - 1].texture, 0);
+    gl.uniform2f(downsample.u.uTexel, 1 / chain[i - 1].width, 1 / chain[i - 1].height);
+    gl.uniform1f(downsample.u.uKaris, i === 1 ? 1 : 0);
+    drawQuad();
+  }
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE);
+  gl.useProgram(upsample.program);
+  for (let i = chain.length - 1; i > 0; i--) {
+    bindTarget(chain[i - 1]);
+    useTexture(upsample.u.uSrc, chain[i].texture, 0);
+    gl.uniform1f(upsample.u.uRadius, state.bloomRadius);
+    drawQuad();
+  }
+  gl.disable(gl.BLEND);
+
+  // ---- composite to the canvas.
+  bindTarget(null);
+  gl.useProgram(composite.program);
+  useTexture(composite.u.uScene, scene.texture, 0);
+  useTexture(composite.u.uBloom, chain[0].texture, 1);
+  gl.uniform2f(composite.u.uResolution, canvas.width, canvas.height);
+  gl.uniform1f(composite.u.uBloomStrength, state.bloom);
+  gl.uniform1f(composite.u.uDispersion, state.dispersion);
+  gl.uniform1f(composite.u.uGrain, state.grain);
+  gl.uniform1f(composite.u.uExposure, state.exposure);
+  gl.uniform1f(composite.u.uSeed, reduceMotion ? 17 : (t * 91) % 1000);
+  drawQuad();
+
+  frames++;
+  if (t - fpsClock > 0.5) {
+    el("fpsOut").textContent = Math.round(frames / (t - fpsClock));
+    el("pointsOut").textContent = (dots.count + (state.haze > 0.001 ? haze.count : 0)).toLocaleString();
+    el("resOut").textContent = `${canvas.width}\u00d7${canvas.height}`;
+    frames = 0;
+    fpsClock = t;
+  }
+  el("levelOut").textContent = level.toFixed(2);
+  el("levelFill").style.transform = `scaleX(${level.toFixed(3)})`;
+
+  requestAnimationFrame(frame);
+}
+
+if (!floatOK) {
+  const note = document.createElement("p");
+  note.className = "note";
+  note.dataset.tone = "warn";
+  note.textContent = "No float render targets here, so the scene clamps at white and the bloom will look flat. Everything still runs.";
+  el("rail").appendChild(note);
+}
+
+writeExport();
+requestAnimationFrame(frame);
+</script>

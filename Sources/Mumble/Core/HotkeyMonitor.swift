@@ -41,9 +41,15 @@ enum PushToTalkKey: String, CaseIterable, Sendable {
         }
     }
 
-    /// Swallowing `fn` would break fn+arrow, fn+delete and the emoji picker, so we let it
-    /// through. Dedicated right-hand modifiers are safe to consume.
-    var shouldConsumeEvent: Bool { self != .fn }
+    /// Every supported key is swallowed, `fn` included.
+    ///
+    /// `fn` used to be let through on the theory that consuming it would break fn+arrow,
+    /// fn+delete and fn+F-keys. It does not: those combinations are translated below the
+    /// session tap and arrive as their own key events carrying `maskSecondaryFn` in their
+    /// own flags. What this consumes is only the `flagsChanged` notification that the
+    /// modifier moved — which is also what the system's globe-key action watches for, and
+    /// that action firing mid-dictation is the emoji palette landing on top of the HUD.
+    var shouldConsumeEvent: Bool { true }
 }
 
 /// Watches for a held modifier key using a `CGEventTap`.
@@ -57,9 +63,26 @@ final class HotkeyMonitor {
     private var runLoopSource: CFRunLoopSource?
     private var isPressed = false
 
+    /// Whether the mic is being held open by a double tap rather than by the key.
+    private(set) var isLatched = false
+    private var pressedAt: Date?
+    /// A tap's release, held back in case a second tap is coming. See `release()`.
+    private var heldRelease: Task<Void, Never>?
+    /// Set when a press has already been acted on and the release that follows means nothing.
+    private var ignoresNextRelease = false
+
+    /// A press shorter than this is a tap rather than a hold.
+    private static let tapCeiling: TimeInterval = 0.3
+    /// How long after a tap a second one still counts as a double tap.
+    private static let doubleTapWindow: TimeInterval = 0.4
+
     var key: PushToTalkKey = .rightOption
     var onPress: (() -> Void)?
     var onRelease: (() -> Void)?
+    /// A double tap. The recording the first tap started keeps running with nothing held.
+    var onLatch: (() -> Void)?
+    /// A tap while latched: stop.
+    var onUnlatch: (() -> Void)?
 
     /// - Returns: `false` if the tap couldn't be created — almost always missing Accessibility permission.
     @discardableResult
@@ -114,6 +137,11 @@ final class HotkeyMonitor {
         tap = nil
         runLoopSource = nil
         isPressed = false
+        heldRelease?.cancel()
+        heldRelease = nil
+        pressedAt = nil
+        ignoresNextRelease = false
+        isLatched = false
     }
 
     // MARK: - Tap callback
@@ -132,8 +160,71 @@ final class HotkeyMonitor {
         guard nowPressed != isPressed else { return false }
         isPressed = nowPressed
 
-        if nowPressed { onPress?() } else { onRelease?() }
+        if nowPressed { press() } else { release() }
 
         return key.shouldConsumeEvent
+    }
+
+    // MARK: - Press and release
+    //
+    // Three gestures on one key. Hold it and talk; tap it twice and talk with your hands
+    // free; tap it once more to stop. They are told apart by how long the key was down and
+    // how soon the next press arrives — nothing else about the key is different.
+
+    private func press() {
+        if isLatched {
+            // A tap while hands-free means stop, and the release that follows it is not a
+            // release of anything: what it would have ended is already ending.
+            isLatched = false
+            ignoresNextRelease = true
+            onUnlatch?()
+            return
+        }
+
+        if let pending = heldRelease {
+            // The second press of a double tap, arriving before the first tap's release was
+            // allowed to land. Because that release was held back, the recording the first
+            // tap started is still running — so latching it starts nothing and stops
+            // nothing, and the two taps read as one continuous gesture.
+            pending.cancel()
+            heldRelease = nil
+            isLatched = true
+            onLatch?()
+            return
+        }
+
+        pressedAt = Date()
+        onPress?()
+    }
+
+    private func release() {
+        if ignoresNextRelease {
+            ignoresNextRelease = false
+            return
+        }
+        // Hands-free: the key is not what is holding the mic open, so letting go means
+        // nothing. Only the next press does.
+        if isLatched { return }
+
+        guard let pressedAt else {
+            onRelease?()
+            return
+        }
+        let held = Date().timeIntervalSince(pressedAt)
+        self.pressedAt = nil
+
+        // A real hold ends the moment it ends. Only a tap pays the wait below, and a tap is
+        // not how anyone dictates a sentence.
+        guard held < Self.tapCeiling else {
+            onRelease?()
+            return
+        }
+
+        heldRelease = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.doubleTapWindow))
+            guard !Task.isCancelled, let self else { return }
+            self.heldRelease = nil
+            self.onRelease?()
+        }
     }
 }

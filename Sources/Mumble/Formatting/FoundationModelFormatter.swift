@@ -1,3 +1,4 @@
+import MumbleCleanup
 import Foundation
 import FoundationModels
 
@@ -15,7 +16,7 @@ import FoundationModels
 ///   of cleaning it — the classic failure when dictation reads as an instruction.
 struct FoundationModelFormatter: TextFormatter {
     /// Deterministic fallback used on timeout, unavailability, or a rejected response.
-    private let fallback = RuleBasedFormatter()
+    private let fallback: RuleBasedFormatter
 
     /// Built at init and warmed by `prewarm()`, because a cold session is the single
     /// largest cost in the whole post-release path — measured at ~2.6s cold versus ~1.0s
@@ -27,8 +28,15 @@ struct FoundationModelFormatter: TextFormatter {
     /// Past this, taking the raw text beats making the user wait.
     private let timeout: Duration = .seconds(4)
 
-    init() {
-        session = LanguageModelSession(instructions: CleanupGuard.instructions)
+    /// How far this pass may go. Captured once per utterance rather than read at use: the
+    /// session is built with the instructions for this strength and then prewarmed, so
+    /// changing the setting mid-dictation must not reach the session already in flight.
+    let strength: CleanupStrength
+
+    init(strength: CleanupStrength = .standard) {
+        self.strength = strength
+        fallback = RuleBasedFormatter(strength: strength)
+        session = LanguageModelSession(instructions: CleanupGuard.instructions(for: strength))
     }
 
     /// Loads model assets and primes the instructions while the user is still speaking.
@@ -81,7 +89,9 @@ struct FoundationModelFormatter: TextFormatter {
                 return first
             }
 
-            guard CleanupGuard.isPlausibleCleanup(original: trimmed, cleaned: cleaned) else {
+            guard CleanupGuard.isPlausibleCleanup(
+                original: trimmed, cleaned: cleaned, strength: strength
+            ) else {
                 Log.speech.info("Foundation model output rejected — using rule-based cleanup")
                 return await fallback.format(trimmed)
             }
