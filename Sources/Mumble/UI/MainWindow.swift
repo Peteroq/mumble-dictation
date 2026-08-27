@@ -22,33 +22,65 @@ struct MainWindow: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             AppBackground()
 
-            VStack(spacing: DS.Space.roomy) {
-                TransportPanel(controller: controller)
+            // One scroll view for the whole page, not a fixed header over a scrolling well.
+            // The transport card is worth a glance, not a permanent third of the window, and
+            // a list that scrolls inside a frame inside a window gives you a small porthole
+            // onto a long history — the thing you spend the most time reading gets the least
+            // room. Everything travels together now, and the card leaves as you read.
+            ScrollView {
+                VStack(spacing: DS.Space.roomy) {
+                    TransportPanel(controller: controller)
 
-                sectionKeys
+                    sectionKeys
 
-                Tile {
-                    Group {
-                        switch section {
-                        case .transcriptions: TranscriptionList()
-                        case .dictionary: DictionaryPanel()
-                        }
+                    switch section {
+                    case .transcriptions: TranscriptionList()
+                    case .dictionary: DictionaryPanel()
                     }
                 }
-                .frame(maxHeight: .infinity)
+                .padding(DS.Space.wide)
+                // The title bar is hidden so the glass runs to the top of the window; this is
+                // what keeps the transport card out from under the traffic lights.
+                .padding(.top, DS.Space.snug)
             }
-            .padding(DS.Space.wide)
-            // The title bar is hidden so the glass runs to the top of the window; this is
-            // what keeps the transport card out from under the traffic lights.
-            .padding(.top, DS.Space.snug)
+
+            titleVeil
         }
         .frame(minWidth: 820, minHeight: 600)
         // Zero-sized: this draws nothing itself, it just gets at the window so the wordmark
         // can be hung in the title bar.
         .background { TitlebarWordmark().frame(width: 0, height: 0) }
+    }
+
+    /// Keeps the title strip legible once the page scrolls under it.
+    ///
+    /// With the whole page scrolling there is always something passing behind the traffic
+    /// lights and the wordmark, and with the title bar hidden there is no material up there to
+    /// hide it — transcripts collided with the lights directly. This is the material the
+    /// hidden bar would have had, faded out rather than cut off, so it reads as the glass
+    /// thickening toward the top of the window instead of as a seam across it.
+    private var titleVeil: some View {
+        ZStack {
+            Color.clear.glassEffect(.regular, in: Rectangle())
+            DS.Color.chassis
+        }
+        .frame(height: DS.Material.titleVeil)
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: 0.45),
+                    .init(color: .clear, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .allowsHitTesting(false)
+        .ignoresSafeArea()
     }
 
     private var sectionKeys: some View {
@@ -171,7 +203,7 @@ private struct TransportPanel: View {
             }
 
             // No "Level" label over it. The orb is the only thing in the bar that moves, and
-            // labelling it costs the one alignment in the row: a caption plus a 124pt orb is
+            // labelling it costs the one alignment in the row: a caption plus the orb is
             // a taller column than any other, which drags every other label off the line.
             Group {
                 // The orb, not a row of bars: it is already the app's picture of your voice
@@ -193,7 +225,7 @@ private struct TransportPanel: View {
 
             Spacer()
         }
-        .padding(DS.Space.roomy)
+        .padding(DS.Space.base)
         .background(Card())
         .onChange(of: controller.state.isActive) { _, active in
             startedAt = active ? Date() : nil
@@ -236,8 +268,6 @@ private struct TranscriptionList: View {
     var body: some View {
         VStack(spacing: DS.Space.base) {
             SearchField(text: $query, placeholder: "Search transcriptions")
-                .padding(.horizontal, DS.Space.roomy)
-                .padding(.top, DS.Space.roomy)
 
             if runs.isEmpty {
                 EmptyPanel(
@@ -245,20 +275,19 @@ private struct TranscriptionList: View {
                     detail: store.runs.isEmpty ? "Press Record to start." : "Try a different search."
                 )
             } else {
-                ScrollView {
-                    LazyVStack(spacing: DS.Space.base) {
-                        ForEach(runs) { run in
-                            TranscriptionRow(
-                                run: run,
-                                onFix: { heard in fix = TranscriptFix(run: run, heard: heard) },
-                                onDelete: {
-                                    withAnimation(DS.Motion.panel) { RunLog.delete(run) }
-                                }
-                            )
-                        }
+                // Still lazy: the page scrolls now, but the rows are the expensive part of it
+                // — each carries a live `NSTextView` — and there is no reason to build the
+                // hundredth one before it is anywhere near the screen.
+                LazyVStack(spacing: DS.Space.base) {
+                    ForEach(runs) { run in
+                        TranscriptionRow(
+                            run: run,
+                            onFix: { heard in fix = TranscriptFix(run: run, heard: heard) },
+                            onDelete: {
+                                withAnimation(DS.Motion.panel) { RunLog.delete(run) }
+                            }
+                        )
                     }
-                    .padding(.horizontal, DS.Space.roomy)
-                    .padding(.bottom, DS.Space.base)
                 }
                 footer
             }
@@ -278,8 +307,6 @@ private struct TranscriptionList: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, DS.Space.roomy)
-        .padding(.bottom, DS.Space.roomy)
         // Confirmed, unlike a single row: one row is trivially re-recorded, the whole
         // history is not, and there's no undo.
         .confirmationDialog(
@@ -449,6 +476,9 @@ struct EmptyPanel: View {
                 .font(DS.Font.label)
                 .foregroundStyle(DS.Color.silkscreen)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // A minimum rather than `maxHeight: .infinity`: inside a scroll view "as tall as
+        // possible" resolves to the content's own height, which for two lines of text is a
+        // caption stranded under the search field.
+        .frame(maxWidth: .infinity, minHeight: DS.Material.emptyPanel)
     }
 }

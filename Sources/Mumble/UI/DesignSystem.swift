@@ -267,7 +267,15 @@ enum DS {
 
         /// The orb standing in for the level meter, in the transport bar. Its render surface
         /// carries transparent margin for the bloom, so the orb itself draws smaller.
-        static let transportOrb: CGFloat = 124
+        static let transportOrb: CGFloat = 96
+
+        /// How far the glass at the top of the window thickens before it fades away, veiling
+        /// the page as it scrolls under the traffic lights.
+        static let titleVeil: CGFloat = 68
+
+        /// How much room an empty list keeps for itself, so "No recordings" reads as an empty
+        /// page rather than as a stray line of text.
+        static let emptyPanel: CGFloat = 220
 
         /// The transcript selection wash, per appearance. Prominent enough to find at a
         /// glance in a wall of history, transparent enough to read through.
