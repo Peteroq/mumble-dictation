@@ -1,78 +1,156 @@
 # Mumble
 
-Push-to-talk dictation for macOS. Hold a key, talk, release — cleaned-up text lands in
-whatever text field has focus. A Wispr Flow-shaped app, built native and fully on-device.
-
-**Status:** working skeleton. Builds, launches, arms the hotkey, transcribes, injects.
-Branding and the LLM cleanup tier are the next passes.
+Push-to-talk dictation for macOS. Hold a key, talk, let go — cleaned-up text lands in
+whatever field has focus. Everything runs on your Mac unless you deliberately turn on the
+Claude tier.
 
 ---
 
-## Coexisting with another dictation app
+## Get started
 
-This app is built to run alongside other dictation tools without colliding with them, which
-is not automatic on macOS and is worth understanding before changing anything:
+Four steps, about five minutes, most of it Xcode downloading Swift packages.
 
-- **Bundle ID `ai.pivotstudio.mumble`** — TCC keys Accessibility and Microphone
-  grants to the bundle ID, so granting or revoking a permission here has no effect on any
-  other app, and vice versa.
-- **Executable `Mumble`** — distinct enough that `pkill -x Mumble` cannot
-  match a differently-named binary. The `Makefile` only ever targets `$(EXEC)`.
-- **Hotkey is configurable** (Right ⌥ / fn / Right ⌘) precisely because another tool may
-  already own the key you'd reach for first. The event tap inspects only its own keycode
-  and passes everything else through untouched.
-
-If you run more than one dictation app, give each a different push-to-talk key. Two apps on
-the same key both record, and whichever injects text will fight the other.
-
----
-
-## Quick start
+### 1. Check the machine
 
 ```bash
-make install     # builds, bundles, signs, copies to /Applications, launches
+git clone https://github.com/Peteroq/mumble-dictation.git
+cd mumble-dictation
+make doctor
 ```
 
-Then grant two permissions — neither is optional, and neither can be requested silently:
+`make doctor` tells you what's missing before you spend time on a build that can't work:
+
+```
+  macOS         26.2
+  Swift         6.3.3
+  Developer dir /Applications/Xcode.app/Contents/Developer
+  Signing       Apple Development: Your Name (TEAMID)
+  Installed     not yet — run 'make install'
+```
+
+You need **macOS 26 or later** and **Xcode** (not just the Command Line Tools — they can't
+build a SwiftUI app). If `doctor` reports the developer directory as `CommandLineTools`:
+
+```bash
+sudo xcode-select -s /Applications/Xcode.app
+```
+
+### 2. Build and install
+
+```bash
+make install
+```
+
+Builds, assembles a real `.app`, signs it, copies it to `/Applications`, and launches it.
+
+### 3. Grant two permissions
+
+Neither can be requested silently, and the app is deaf and mute without them.
 
 | Permission | Where | Needed for |
 |---|---|---|
-| **Accessibility** | System Settings ▸ Privacy & Security ▸ Accessibility | The `CGEventTap` that sees the hotkey, and the AX text insert |
-| **Microphone** | Prompted on first dictation | Audio capture |
+| **Accessibility** | System Settings ▸ Privacy & Security ▸ Accessibility ▸ **+** ▸ Mumble | Seeing the hotkey anywhere, and typing text into the focused app |
+| **Microphone** | Prompted on your first recording | Recording you |
 
-Restart Mumble after granting Accessibility. Then hold **Right ⌥** and talk.
+**Quit and reopen Mumble after granting Accessibility.** The event tap is created at launch.
 
-### Why grants survive rebuilds here
+### 4. Talk
 
-TCC stores a *code-signing requirement* per entry, not just a path. An ad-hoc signature
-changes on every build, so the rebuilt binary stops satisfying the stored requirement —
-and the symptom is nasty: the Accessibility toggle still **shows as on** while the app is
-reported untrusted, and flipping it changes nothing because the stale row is the problem.
+Hold **fn** (or Right ⌥ / Right ⌘ — pick one in Settings) anywhere on the system and speak.
+Let go and the text is typed where your cursor is.
 
-The `Makefile` therefore signs with a stable Developer ID (auto-detected via
-`security find-identity`, falling back to ad-hoc). Verified: rebuild + reinstall keeps both
-grants with no re-prompt.
-
-If a grant ever does get wedged, reset that one row and re-add — never toggle:
-
-```bash
-tccutil reset Accessibility ai.pivotstudio.mumble
-tccutil reset Microphone   ai.pivotstudio.mumble
-```
-
-Always pass the bundle ID. A bare `tccutil reset Accessibility` wipes **every** app on the
-machine. Then quit System Settings entirely (⌘Q) before reopening — that pane caches its
-list and will otherwise show the row you just deleted.
-
-> **Keep the build out of iCloud.** `~/Desktop` and `~/Documents` are file-provider synced
-> on this machine; the sync engine can materialize/dematerialize files inside an `.app` and
-> corrupt its signature. `make install` puts the running copy in `/Applications`.
-
-Other targets: `make app` (bundle only), `make run` (run in place), `make clean`.
+Or **double-tap** the key to keep the mic open with nothing held, and tap once more to stop.
 
 ---
 
-## Architecture
+## If something doesn't work
+
+**The hotkey does nothing.** Accessibility was granted but Mumble wasn't relaunched, or the
+grant got wedged. Reset just that row and re-add it:
+
+```bash
+tccutil reset Accessibility ai.pivotstudio.mumble
+```
+
+> Always pass the bundle ID. A bare `tccutil reset Accessibility` wipes **every app on the
+> machine.** Quit System Settings entirely (⌘Q) before reopening — that pane caches its list
+> and will otherwise show the row you just deleted.
+
+**The hotkey worked and then stopped after a rebuild.** You're on an ad-hoc signature. macOS
+keys permissions to the *code signature*, and an ad-hoc one changes on every single build,
+so the app you rebuilt is a different app as far as the system is concerned. The symptom is
+nasty: the Accessibility toggle still reads **on** while the app is untrusted.
+
+```bash
+make signing
+```
+
+prints which identity you have and, if there isn't one, the two ways to get a stable one —
+signing in to Xcode with any Apple ID, or making a self-signed certificate in Keychain
+Access. Either works; you only have to do it once.
+
+**Nothing is transcribed on the first run.** macOS downloads the speech model for your
+locale the first time it's needed. Give it a minute and try again.
+
+**You already run another dictation app.** Give each a different push-to-talk key. Two apps
+on one key both record, and whichever types first fights the other. Mumble's event tap
+inspects only its own keycode and passes everything else through.
+
+---
+
+## What it does
+
+**Dictate anywhere.** A `CGEventTap` sees the hotkey no matter which app is focused. The HUD
+is a non-activating panel, so your text field never loses focus and there is always
+something to type into.
+
+**Clean up what you said.** Cleanup has two independent controls, in Settings:
+
+- *How much help* — **Light** fixes punctuation and keeps every word; **Standard** also
+  removes fillers and applies spoken corrections ("send it Tuesday, actually Wednesday");
+  **Polished** also repairs grammar and tightens phrasing.
+- *What runs it* — **Rules** (deterministic, instant, no model), **On-device AI** (Apple's
+  Foundation Models), or **Claude** (needs an API key; the only path that leaves your Mac).
+
+Whatever you pick, a guard checks the result is recognisably a cleaned version of what you
+said and falls back to the rules if it isn't. That check is what stops a model *answering*
+your dictation instead of cleaning it — dictate "what is the capital of france" and you get
+your sentence back, not "Paris".
+
+**Teach it your words.** The Dictionary holds terms to bias the recogniser toward
+("Anthropic", "Supabase") and correction pairs ("cloud code" → "Claude Code"). Highlight a
+word in any past transcript to teach it on the spot. It's a plain text file you can also
+edit by hand; the app picks up changes live.
+
+**Keep your prompts.** Dictating a long instruction is the fast way to write one, so any
+transcript can be saved to the Prompts tab with one click, then organised into folders,
+tagged, and searched.
+
+**Two speech engines.** Apple's `SpeechAnalyzer` (default — streams text while you talk, no
+download) or Parakeet v3 on the Neural Engine (more accurate on English, resolves on
+release, ~470 MB). Switch in Settings.
+
+---
+
+## Everyday commands
+
+| | |
+|---|---|
+| `make install` | build, sign, install to `/Applications`, launch |
+| `make doctor` | preflight: OS, toolchain, signing, install state |
+| `make signing` | which identity signs the app, and how to get one |
+| `make run` | run from the staging directory without installing |
+| `make app` | build the bundle only |
+| `make clean` | remove all build products |
+| `swift test` | run the test suites |
+
+Build products and the staged `.app` live in `~/Library/Caches/MumbleBuild`, deliberately
+outside the repo: iCloud-synced folders mutate files inside a bundle and break its
+signature.
+
+---
+
+## How it fits together
 
 ```
  hold key ─► HotkeyMonitor ──► DictationController ◄── Settings
@@ -81,123 +159,67 @@ Other targets: `make app` (bundle only), `make run` (run in place), `make clean`
                      ▼          ▼          ▼
               AudioCapture  HUDPanel   TranscriptionEngine
                      │                      │
-                (AudioChunk) ──ordered──► AppleSpeechEngine
+                (AudioChunk) ──ordered──► Apple / Parakeet
                                             │
                                        (transcript)
                                             ▼
-                                      TextFormatter
-                                            ▼
-                                      TextInjector ─► focused app
+                                   Dictionary ─► TextFormatter ─► CleanupGuard
+                                                                       ▼
+                                                        TextInjector ─► focused app
 ```
-
-### Decisions worth knowing
-
-**The HUD must never take focus.** `HUDPanel` is a `.nonactivatingPanel` with
-`canBecomeKey == false`. This is the load-bearing detail of the whole app: if the overlay
-took key status, the user's text field would lose focus and there'd be nothing left to
-inject into. Everything else is replaceable; this isn't.
-
-**The hotkey needs a `CGEventTap`, not `NSEvent`.** `fn` and left/right modifier
-discrimination don't surface through `NSEvent.addGlobalMonitorForEvents` or the Carbon
-hotkey API. A session event tap is the only way to see them — which is why Accessibility
-permission is a hard requirement rather than a nicety.
-
-**Audio ordering is explicit.** `AudioCapture` yields into an `AsyncStream` drained by a
-single task. Spawning a `Task` per buffer would be simpler and would silently corrupt the
-transcript, because unstructured tasks have no ordering guarantee.
-
-**Buffers are copied, never borrowed.** `AVAudioEngine` recycles the buffer it hands to a
-tap the instant the callback returns. `AudioChunk`'s `@unchecked Sendable` is only sound
-because `AudioCapture` always allocates fresh storage before handing off.
-
-**Two swappable seams.** `TranscriptionEngine` and `TextFormatter` are protocols so the
-two components most likely to change can change without touching anything else.
-
-### Layout
 
 ```
 Sources/Mumble/
-├── MumbleApp.swift              @main, AppDelegate, MenuBarExtra
-├── Core/
-│   ├── DictationController.swift   state machine, wires everything
-│   ├── HotkeyMonitor.swift         CGEventTap on .flagsChanged
-│   ├── AudioCapture.swift          AVAudioEngine tap + format conversion + RMS
-│   └── TextInjector.swift          AX insert, pasteboard+⌘V fallback
-├── Transcription/
-│   ├── TranscriptionEngine.swift   protocol + AudioChunk
-│   └── AppleSpeechEngine.swift     SpeechAnalyzer / SpeechTranscriber
-├── Formatting/
-│   └── TextFormatter.swift         protocol + RuleBasedFormatter
-├── UI/
-│   ├── HUDPanel.swift              non-activating floating panel
-│   └── HUDView.swift               waveform + live transcript, Brand palette
-└── Support/
-    ├── Settings.swift, Permissions.swift, Log.swift
+├── MumbleApp.swift          @main, AppDelegate, MenuBarExtra
+├── Core/                    hotkey, capture, dictation state machine, injection
+├── Transcription/           TranscriptionEngine protocol, Apple + Parakeet
+├── Formatting/              TextFormatter protocol, rules / on-device / Claude, CleanupGuard
+├── Dictionary/              the store behind MumbleDictionary
+├── Prompts/                 prompt library model and store
+├── Orb/                     the Metal orb: renderer, shaders, tuned parameters
+├── UI/                      main window, settings page, HUD, design system
+└── Support/                 settings, logging, permissions, run log
 ```
 
----
+### Decisions worth knowing before you change anything
 
-## Speech engine
+**The HUD must never take focus.** `HUDPanel` is a `.nonactivatingPanel` with
+`canBecomeKey == false`. If the overlay took key status the user's text field would lose
+focus and there'd be nothing left to type into. Everything else here is replaceable.
 
-Default is Apple's **`SpeechAnalyzer` / `SpeechTranscriber`**, new in macOS 26: no
-dependency, no bundled model, no cloud path, real streaming with `.volatileResults` so
-text appears while you're still talking. The OS downloads and manages model assets, so the
-first run for a locale may pause on `AssetInstallationRequest`.
+**The hotkey needs a `CGEventTap`.** `fn` and left/right modifier discrimination don't
+surface through `NSEvent` or the Carbon hotkey API. That's why Accessibility is a hard
+requirement and not a nicety.
 
-The intended upgrade is **Parakeet v3** via FluidAudio (CoreML on the Neural Engine) —
-measurably better English WER, ~110× realtime, ~66 MB resident. Implementing
-`TranscriptionEngine` is the entire cost of switching; `DictationController` doesn't
-change.
+**`AVAudioEngine` already follows the system default input.** An earlier version pinned the
+input node with `setDeviceID` and broke AirPods entirely — it knocks the node off the
+default-device aggregate and the tap captures nothing. Pinning is opt-in, for the case where
+a call takes your headset and you want dictation to stay on the laptop mic.
 
-| | Apple SpeechTranscriber | Parakeet v3 (FluidAudio) | Whisper large-v3 (WhisperKit) |
-|---|---|---|---|
-| Dependency | none | SwiftPM | SwiftPM |
-| Model download | OS-managed | ~600 MB | ~1.5 GB |
-| English accuracy | good | best | good |
-| Languages | many | 25 | 99 |
-| Latency | low | ~80 ms | 200–500 ms |
+**Audio ordering is explicit.** Buffers go through an `AsyncStream` drained by one task.
+A `Task` per buffer would be simpler and would silently scramble the transcript.
 
----
+**Buffers are copied, never borrowed.** `AVAudioEngine` recycles the buffer it hands a tap
+the moment the callback returns.
 
-## Not built yet
-
-1. **LLM cleanup tier.** `RuleBasedFormatter` strips fillers, fixes spacing, capitalizes
-   sentences and adds terminal punctuation — genuinely useful, entirely deterministic. The
-   real win is a second `TextFormatter` backed by Apple's on-device Foundation Models
-   (macOS 26) for tone, list formatting, and honoring spoken corrections, with Claude as an
-   optional higher-quality tier.
-2. **Command Mode.** Select text, hold a second hotkey, say "make this more formal."
-   Needs AX read of `kAXSelectedTextAttribute` plus an LLM round-trip.
-3. **Dictionary from the dictation itself.** The dictionary exists — terms bias the engine,
-   corrections rewrite the transcript, and a mistake can be taught by right-clicking the
-   word in a past transcription. What isn't built is teaching it from the HUD while the
-   text is still live, or applying a new rule backwards across the whole history.
-4. **Branding.** `Brand` in `HUDView.swift` is a two-color placeholder gradient. App icon,
-   real palette, HUD motion design, onboarding.
-5. **Onboarding.** A first-run window that walks through both permissions instead of
-   relying on the menu's "Grant…" items.
-6. **Developer ID signing + notarization.** Ends the TCC-reset churn and makes the app
-   distributable.
+**The orb's parameters are pixel-absolute.** Dot size is a point sprite measured in pixels,
+so `OrbRenderer` scales it against the size the parameters were tuned at. Render it smaller
+without that and the sphere fills in solid.
 
 ---
 
-## Verified
+## Also in this repo
 
-Driven with a synthetic Right ⌥ hold (`scratchpad/ptt/ptt2.swift` posts `flagsChanged`
-events) and confirmed via `/usr/bin/log show --predicate 'subsystem ==
-"ai.pivotstudio.mumble"'`:
+- `Sources/MumbleDictionary/` — the dictionary engine as its own target, because its
+  behaviour is a cross-platform contract. `Tests/MumbleDictionaryTests` runs the vectors in
+  `shared/dictionary-test-vectors.json`, and the Windows app runs the same file.
+- `windows/` — an Avalonia port sharing those vectors. See `windows/README.md`.
+- `bench/` — a standalone benchmark package.
+- `prototypes/orb-lab.html` — the WebGL lab the orb was designed in, with every parameter on
+  a slider. The Metal renderer is a port of it.
+- `docs/PARAKEET-WINDOWS.md` — model acquisition notes.
 
-- Builds clean under Swift 6 strict concurrency.
-- Signs with Developer ID; grants survive rebuild + reinstall.
-- Launches as an accessory app, no Dock icon, menu bar item present.
-- Event tap arms on grant without a restart (the poller catches it).
-- Full state machine: `starting → listening → finishing → idle`, no errors.
-- `SpeechAnalyzer` starts; models already installed, no download stall.
-- Audio capture runs and converts native 48 kHz → 16 kHz for the engine.
-- HUD renders bottom-center at `{{790, 96}, {340, 76}}` without taking focus.
-- Silence produces an empty transcript and injects nothing.
+## Requirements
 
-**Not yet verified:** speech → transcript → cleanup → injection. Synthetic key events
-can't produce audio, so this needs a human to hold the key and talk.
-
-> `log` is shadowed in this shell — use `/usr/bin/log` explicitly or it returns nothing.
+macOS 26+, Xcode with a Swift 6.2 toolchain, Apple silicon recommended (the orb and Parakeet
+both want the GPU and Neural Engine).
