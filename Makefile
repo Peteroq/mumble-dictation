@@ -75,8 +75,16 @@ build:
 
 ## Regenerates AppIcon.icns from Tools/makeicon.swift. Not a dependency of `app` — the
 ## icon rarely changes and rendering 10 PNGs on every build is wasted time.
+## Compiled rather than interpreted, because it draws the real orb: the tool is built
+## against `Sources/Mumble/Orb`, so the icon is the same renderer, shaders and tuned
+## parameters the HUD uses and cannot drift from them.
 icon:
-	@swift Tools/makeicon.swift
+	@mkdir -p "$(STAGE)"
+	@swiftc -O -o "$(STAGE)/makeicon" Tools/makeicon.swift \
+		Sources/Mumble/Orb/OrbRenderer.swift \
+		Sources/Mumble/Orb/OrbShaders.swift \
+		Sources/Mumble/Orb/OrbParameters.swift
+	@"$(STAGE)/makeicon"
 	@iconutil -c icns Resources/AppIcon.iconset -o Resources/AppIcon.icns
 	@echo "wrote Resources/AppIcon.icns"
 
