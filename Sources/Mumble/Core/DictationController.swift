@@ -141,6 +141,14 @@ final class DictationController {
     /// - Returns: `false` if the hotkey tap couldn't be installed (missing Accessibility).
     @discardableResult
     func activate() -> Bool {
+        // Before anything else, because the stored value is the *system default* and a
+        // pinned microphone is only read by the pickers. Launched with a pin, the transport
+        // card and the HUD's "Connecting …" both named the wrong device until you happened
+        // to open the picker — while the recording itself used the pinned one all along,
+        // since `AudioCapture` reads the preference directly. The UI was the only thing
+        // lying.
+        reloadInputDevice()
+
         inputObserver.start { [weak self] device in
             guard let self else { return }
             // When the input is pinned, the default moving is not news the transport should
