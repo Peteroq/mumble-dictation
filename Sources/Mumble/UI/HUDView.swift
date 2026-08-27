@@ -138,7 +138,13 @@ struct HUDView: View {
         // the one the user has in mind, and this is the moment they can still do something
         // about it.
         case .connecting: "Connecting \(controller.inputDevice?.name ?? "microphone")…"
-        case .listening: controller.transcript.isEmpty ? "Listening…" : controller.transcript
+        // Hands-free has to say how to get out of it. Held, the gesture is its own reminder
+        // that the mic is live and letting go ends it; latched, there is nothing in your
+        // hands and no reason to know the second tap is what stops it.
+        case .listening:
+            if !controller.transcript.isEmpty { controller.transcript }
+            else if controller.isHandsFree { "Listening — tap \(Settings.shared.pushToTalkKey.displayName) to stop" }
+            else { "Listening…" }
         // Parakeet transcribes in one pass on release, so there's nothing to show until
         // it lands — say what's happening instead of leaving an empty pill.
         case .finishing: controller.transcript.isEmpty ? "Transcribing…" : controller.transcript
