@@ -227,3 +227,17 @@ without that and the sphere fills in solid.
 
 macOS 26+, Xcode with a Swift 6.2 toolchain, Apple silicon recommended (the orb and Parakeet
 both want the GPU and Neural Engine).
+
+## License
+
+MIT — see [LICENSE](LICENSE). Use it, change it, ship it; keep the copyright notice.
+
+Third-party pieces keep their own terms:
+
+| | |
+|---|---|
+| Simplex noise in `OrbShaders.swift` | MIT — © 2011 Ashima Arts / Stefan Gustavson ([webgl-noise](https://github.com/ashima/webgl-noise)) |
+| [FluidAudio](https://github.com/FluidInference/FluidAudio) | Apache-2.0 |
+| Parakeet TDT model weights | CC-BY-4.0 — attribution required if you redistribute them. See [`docs/PARAKEET-WINDOWS.md`](docs/PARAKEET-WINDOWS.md) |
+
+The weights are not in this repository; each platform fetches them at runtime.
