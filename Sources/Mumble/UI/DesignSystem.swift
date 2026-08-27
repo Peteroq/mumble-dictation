@@ -50,7 +50,7 @@ enum DS {
         /// Darker than the surface it sits on, and deliberately not glass: the card is
         /// already glass over the window's glass, and a third blur inside it makes a smudge
         /// rather than a surface.
-        static let sunken = face(light: 0x2A2340, lightAlpha: 0.10, dark: 0x000000, darkAlpha: 0.30)
+        static let sunken = face(light: 0x2A2340, lightAlpha: 0.07, dark: 0x000000, darkAlpha: 0.18)
 
         /// An inset field — search boxes, code wells, anything typed into.
         static let well = face(light: 0xFFFFFF, lightAlpha: 0.46, dark: 0x08070E, darkAlpha: 0.36)
@@ -440,6 +440,10 @@ enum DS {
         static let pressed = Spec(color: .black.opacity(0.05), radius: 4, x: 0, y: 1)
         /// A grouped panel above the ground.
         static let panel = Spec(color: .black.opacity(0.06), radius: 22, x: 0, y: 8)
+        /// A panel that is *over* the page rather than on it — the pinned transport card.
+        /// Far heavier than `panel`, because the thing it has to separate from is not a
+        /// ground but text moving under it, and a 0.06 shadow disappears against that.
+        static let floating = Spec(color: .black.opacity(0.34), radius: 30, x: 0, y: 12)
         /// The window against the desktop.
         static let window = Spec(color: .black.opacity(0.22), radius: 40, x: 0, y: 16)
 

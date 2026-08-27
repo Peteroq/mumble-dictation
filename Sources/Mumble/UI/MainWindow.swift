@@ -241,7 +241,15 @@ private struct TransportPanel: View {
                 .background {
                     Color.clear.glassEffect(.regular, in: dsShape(DS.Radius.panel))
                 }
-                .dsShadow(DS.Shadow.panel)
+                // A lit edge and a heavy shadow, which is what actually separates the card
+                // from the page: the glass behind it blurs the transcripts but blurred text
+                // is still roughly the same value as the card, so with nothing at the
+                // boundary the two read as one surface.
+                .overlay {
+                    dsShape(DS.Radius.panel)
+                        .strokeBorder(DS.Color.panelHighlight, lineWidth: DS.Border.hairline)
+                }
+                .dsShadow(DS.Shadow.floating)
         }
         .onChange(of: controller.state.isActive) { _, active in
             startedAt = active ? Date() : nil
