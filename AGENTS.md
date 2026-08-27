@@ -89,15 +89,29 @@ invisible to SwiftUI's state graph. Don't "clean that up" into `@State`.
 and material token. **Views must not contain literal values.** If a component needs a number
 that isn't a token, add the token rather than inlining it.
 
-The direction is 1980s field recorders — Sony TC-D5, Marantz PMD, Nakamichi, Braun. Silver
-face in light appearance, black face in dark. Two rules that are not negotiable:
+The direction is the orb, spread across the app: violet-to-pink glass over a blurred colour
+mesh, with the desktop visible through it. Three rules that are load-bearing:
 
-- **Red means recording.** Nothing else in the app is red.
-- **Amber and green are instrumentation only** — level meters, never UI chrome.
+- **The palette is the orb's.** `DS.Color.selectionRamp` and `DS.Color.ramp` read their stops
+  from `OrbParameters.colorA/B/C`. Do not re-type those numbers anywhere — a retune of the
+  orb is supposed to carry into the app's colour, and a copy silently breaks that.
+- **Surfaces are translucent, and mostly borderless.** `DS.Color.panel`, `deck`, `cap` and
+  friends carry their alpha in the token, not at the call site. A card is a tint over the
+  window's glass; the value change *is* the edge, which is why `Card` and `Tile` draw no
+  hairline. `Inset` still does — a field has to look like somewhere text goes.
+- **The window is real glass.** `AppBackground` is mesh → `glassEffect` → chassis wash, and
+  the scene sets `.containerBackground(Color.clear, for: .window)` with
+  `.windowStyle(.hiddenTitleBar)`. Remove either and the backdrop blur has an opaque window
+  behind it, so the effect quietly becomes a flat grey rectangle.
 
-Explicitly ruled out: neon, vaporwave, synthwave, purple/pink gradients, glowing text, chrome
-lettering, grid horizons. There are **no gradients anywhere**; depth comes from flat panels,
-hairline bevels and procedurally-drawn brushed grain.
+Instrumentation colours are `meterOn` / `meterFlag` / `meterHot`, and they are for state, not
+chrome. They were renamed off `meterGreen` / `meterAmber` / `meterRed` in the orb palette
+pass: the values are blue, pink and red now, and a token whose name lies about its colour is
+how the wrong one ends up on screen.
+
+The previous direction — 1980s field recorders, silver face, lime accent, "no gradients
+anywhere" — is gone as of the orb palette pass. If you find a lime in a diff, it is a leftover,
+not a survivor.
 
 ---
 

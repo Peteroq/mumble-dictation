@@ -168,8 +168,10 @@ change.
    optional higher-quality tier.
 2. **Command Mode.** Select text, hold a second hotkey, say "make this more formal."
    Needs AX read of `kAXSelectedTextAttribute` plus an LLM round-trip.
-3. **Personal dictionary.** Names and jargon the ASR keeps missing. `SpeechAnalyzer`
-   supports this through `AnalysisContext` / `SFCustomLanguageModelData`.
+3. **Dictionary from the dictation itself.** The dictionary exists — terms bias the engine,
+   corrections rewrite the transcript, and a mistake can be taught by right-clicking the
+   word in a past transcription. What isn't built is teaching it from the HUD while the
+   text is still live, or applying a new rule backwards across the whole history.
 4. **Branding.** `Brand` in `HUDView.swift` is a two-color placeholder gradient. App icon,
    real palette, HUD motion design, onboarding.
 5. **Onboarding.** A first-run window that walks through both permissions instead of

@@ -123,15 +123,27 @@ final class DictationController {
         self.makeEngine = makeEngine
     }
 
+    /// Re-reads the input preference, so the transport names the right device the moment it
+    /// is picked rather than after the next recording.
+    func reloadInputDevice() {
+        inputDevice = Settings.shared.inputDeviceUID.flatMap(AudioInputDevice.withUID)
+            ?? AudioInputDevice.systemDefault
+    }
+
     // MARK: - Lifecycle
 
     /// - Returns: `false` if the hotkey tap couldn't be installed (missing Accessibility).
     @discardableResult
     func activate() -> Bool {
         inputObserver.start { [weak self] device in
-            guard let self, device != inputDevice else { return }
-            inputDevice = device
-            Log.audio.info("default input is now \(device?.name ?? "none", privacy: .public)")
+            guard let self else { return }
+            // When the input is pinned, the default moving is not news the transport should
+            // report — the whole point of the pin is that a call taking the headset doesn't
+            // change what Mumble records from.
+            let current = Settings.shared.inputDeviceUID.flatMap(AudioInputDevice.withUID) ?? device
+            guard current != inputDevice else { return }
+            inputDevice = current
+            Log.audio.info("input is now \(current?.name ?? "none", privacy: .public)")
         }
         // Rendering both cues costs a few milliseconds of arithmetic; paying it here keeps
         // it out of the gap between key-down and the first word.
@@ -241,6 +253,7 @@ final class DictationController {
 
                 let device = try capture.start(
                     outputFormat: format,
+                    preferredDeviceUID: Settings.shared.inputDeviceUID,
                     onBuffer: { chunk in
                         audioContinuation.yield(chunk)
                     },
@@ -310,7 +323,7 @@ final class DictationController {
                 // device that isn't going to work. Say which one, since the whole point of
                 // following the system default is that it may not be the one the user
                 // expects.
-                fail("\(inputDevice?.name ?? "The microphone") isn't sending any audio. Pick a different input in System Settings ▸ Sound.")
+                fail("\(inputDevice?.name ?? "The microphone") isn't sending any audio. Pick a different input in Settings ▸ Microphone.")
             default:
                 break
             }

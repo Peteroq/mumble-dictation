@@ -1,20 +1,22 @@
+import AppKit
 import SwiftUI
 
 /// The design system for Mumble.
 ///
-/// Direction: soft future-tech. Near-white grounds with a lot of air, generous squircle
-/// radii, one electric accent, and depth that comes from soft diffuse shadow rather than
-/// bevels or glow. Every value a view needs lives here; components never declare their own
-/// colors, sizes, radii or durations.
+/// Direction: the orb, spread across the app. Glass grounds you can see the desktop through,
+/// a violet-to-pink prism ramp taken from the orb's own shader constants, and depth from
+/// translucency and soft shadow rather than from borders. Every value a view needs lives
+/// here; components never declare their own colors, sizes, radii or durations.
 ///
-/// Two faces from one set of tokens: a paper-bright light appearance and a near-black dark
-/// one. A view is written once and both faces work.
+/// Two faces from one set of tokens: a bright glass in light appearance and a near-black one
+/// in dark. A view is written once and both faces work.
 ///
 /// The rules that keep this from drifting:
-/// - One accent: the lime. It marks what is live or selected, never decoration.
+/// - The palette is the orb's. `OrbParameters` holds the stops; nothing here re-types them.
+/// - Surfaces are translucent. A card is a tint over the window's glass, not an opaque plane,
+///   which is why so few of them carry a border — the value change is the edge.
 /// - Radii are large and continuous. Nothing in the app has a hard 90° corner.
 /// - Space is the primary layout tool. When something feels cramped, add air, not a border.
-/// - Depth is a soft shadow and a hairline. No gradients on surfaces, no glow, no grain.
 enum DS {
 
     // MARK: - Color
@@ -22,93 +24,217 @@ enum DS {
     /// Surfaces, from the window ground inward. `face` resolves each to its light or dark
     /// value for the current appearance.
     enum Color {
-        /// The window ground everything floats on. Slightly off-white so cards read as white.
-        static let chassis = face(light: 0xEDF1E9, dark: 0x0A0C0B)
+        // MARK: Surfaces
+        //
+        // Everything from `panel` inward is translucent: the window itself is glass, and each
+        // surface is a tint laid over what shows through it. Stacking tints is what gives the
+        // app its depth, so an opaque value here would punch a hole in the effect.
+
+        /// The window ground, laid over the glass as a frosting wash.
+        ///
+        /// The desktop still comes through, but only as movement and light — this is the only
+        /// knob that controls how much. The system glass blur has no public radius, so the
+        /// frosted read comes from here rather than from a wider blur.
+        static let chassis = face(light: 0xF3F1FA, lightAlpha: 0.62, dark: 0x0B0A12, darkAlpha: 0.74)
 
         /// A card or grouped surface lifted off the ground.
-        static let panel = face(light: 0xFFFFFF, dark: 0x15191A)
+        static let panel = face(light: 0xFFFFFF, lightAlpha: 0.62, dark: 0xC9C4E8, darkAlpha: 0.12)
 
         /// Hairline along the lit edge of a card. Barely there — it defines an edge, not a bevel.
-        static let panelHighlight = face(light: 0xFFFFFF, dark: 0x232A2C)
+        static let panelHighlight = face(light: 0xFFFFFF, lightAlpha: 0.70, dark: 0xFFFFFF, darkAlpha: 0.10)
 
         /// The slightly darker side of a card edge, used where two surfaces meet.
-        static let panelShade = face(light: 0xE3E9DF, dark: 0x0F1213)
+        static let panelShade = face(light: 0x2A2340, lightAlpha: 0.06, dark: 0x000000, darkAlpha: 0.22)
 
         /// An inset field — search boxes, code wells, anything typed into.
-        static let well = face(light: 0xF2F5EE, dark: 0x101416)
+        static let well = face(light: 0xFFFFFF, lightAlpha: 0.46, dark: 0x08070E, darkAlpha: 0.36)
 
-        /// The backdrop for content lists. A hair off `panel` so a list reads as its own plane.
-        static let deck = face(light: 0xFAFCF7, dark: 0x111517)
+        /// The backdrop for content lists. Fainter than `panel` so a list reads as its own
+        /// plane without becoming another opaque slab.
+        static let deck = face(light: 0xFFFFFF, lightAlpha: 0.34, dark: 0xC9C4E8, darkAlpha: 0.07)
 
         /// A button surface.
-        static let cap = face(light: 0xFFFFFF, dark: 0x1C2123)
+        static let cap = face(light: 0xFFFFFF, lightAlpha: 0.66, dark: 0xC9C4E8, darkAlpha: 0.11)
 
-        /// Dividers and hairline borders.
-        static let seam = face(light: 0xE2E7DC, dark: 0x252B2D)
+        /// Dividers and the few hairlines left. Cards don't use it — fields and menus do.
+        static let seam = face(light: 0x2A2340, lightAlpha: 0.10, dark: 0xFFFFFF, darkAlpha: 0.09)
 
-        // Text
+        // MARK: Text
+
         /// Primary readable text.
-        static let ink = face(light: 0x0F1310, dark: 0xEEF3E9)
+        static let ink = face(light: 0x14121C, dark: 0xF2F0FA)
         /// Supporting text — timings, counts, secondary rows.
-        static let inkSecondary = face(light: 0x6A7268, dark: 0x939C90)
+        static let inkSecondary = face(light: 0x5F5B70, dark: 0x9C98B3)
         /// Small labels above a group. Quieter than `inkSecondary`.
-        static let silkscreen = face(light: 0x878F82, dark: 0x7E8879)
+        static let silkscreen = face(light: 0x807C93, dark: 0x827FA0)
         /// Text sitting on `deck`. Same value as `ink`; the separate name keeps call sites
         /// honest about which plane they're on if the two ever diverge again.
-        static let inkOnDeck = face(light: 0x0F1310, dark: 0xEEF3E9)
+        static let inkOnDeck = face(light: 0x14121C, dark: 0xF2F0FA)
 
-        // Accent — the only saturated color used for state
-        /// Live, selected, engaged. The lime is deepened on the light face so it holds
-        /// contrast against white; the bright value would vibrate there.
-        static let accent = face(light: 0x7DC400, dark: 0xC7F24A)
-        /// A wash of the accent, for filled backgrounds behind dark text.
-        static let accentSoft = face(light: 0xE9F7CB, dark: 0x243213)
-        /// Text and glyphs sitting on a solid `accent` fill.
-        static let onAccent = face(light: 0x0B0F08, dark: 0x0B0F08)
+        // MARK: Accent — the orb's own colors
+        //
+        // Violet is the resting state and pink is the live one, which is the same order the
+        // prism ramp runs in. Nothing else in the app is saturated.
 
-        /// Text and glyphs sitting on a solid `ink` fill — the primary button. Not `panel`:
-        /// `panel` is a surface value that happens to be white today, and reusing it here
-        /// silently couples the button's legibility to a card's background.
-        static let onInk = face(light: 0xFFFFFF, dark: 0x0B0F08)
+        /// Selected, engaged, current. Deepened on the light face so it holds contrast
+        /// against white; the bright value would vibrate there.
+        static let accent = face(light: 0x6C4FE0, dark: 0xB9A6FF)
+        /// A wash of the accent, for filled backgrounds behind text.
+        static let accentSoft = face(light: 0xE9E3FF, lightAlpha: 0.85, dark: 0x6C4FE0, darkAlpha: 0.22)
+        /// Text and glyphs sitting on a solid `accent` fill, or on the brand gradient.
+        static let onAccent = face(light: 0xFFFFFF, dark: 0x120E22)
 
-        /// The recording indicator. Same accent — one live color in the app.
-        static let record = accent
+        /// Text and glyphs sitting on a solid `ink` fill.
+        static let onInk = face(light: 0xFFFFFF, dark: 0x0B0A12)
+
+        /// The recording indicator — the hot end of the ramp, so live reads as the orb at
+        /// full voice rather than as a second accent.
+        static let record = face(light: 0xE0407A, dark: 0xFF7AAE)
         /// The indicator when idle: a dim lens, not an absence.
-        static let recordIdle = face(light: 0xD8DED2, dark: 0x2A302C)
+        static let recordIdle = face(light: 0x2A2340, lightAlpha: 0.16, dark: 0xFFFFFF, darkAlpha: 0.14)
 
-        // Selection and focus
-        /// A selected row or segment — a soft accent wash, so the label stays dark and legible.
-        static let selection = face(light: 0xE8F6CE, dark: 0x24301A)
+        // MARK: Selection and focus
+
+        /// A selected row or segment — a soft accent wash, so the label stays legible.
+        static let selection = face(light: 0x6C4FE0, lightAlpha: 0.14, dark: 0xB9A6FF, darkAlpha: 0.18)
         /// Edge on a selected element.
-        static let selectionEdge = face(light: 0xCBE596, dark: 0x3A4A22)
+        static let selectionEdge = face(light: 0x6C4FE0, lightAlpha: 0.34, dark: 0xB9A6FF, darkAlpha: 0.30)
         /// Keyboard focus ring.
         static let focusRing = accent
         /// Row under the pointer, before selection.
-        static let hover = face(light: 0xF4F7EE, dark: 0x1A1F21)
+        static let hover = face(light: 0x2A2340, lightAlpha: 0.05, dark: 0xFFFFFF, darkAlpha: 0.06)
 
-        // Level instrumentation and status. Never use these for UI chrome.
-        /// The unlit track a level meter's bars sit in.
-        static let meterFace = face(light: 0xF2F5EE, dark: 0x101416)
-        /// A lit level bar at nominal.
-        static let meterLamp = accent
-        /// Meter scale marks.
-        static let meterNeedle = face(light: 0xC9D1C3, dark: 0x2C3430)
-        /// Enabled / healthy.
-        static let meterGreen = face(light: 0x5FB000, dark: 0x9EE84A)
-        /// Attention — a correction was applied, a value was overridden. Deliberately not
-        /// the accent: the accent means live, and these two must never be confused.
-        static let meterAmber = face(light: 0x6B4BE8, dark: 0xA895FF)
+        // MARK: Instrumentation and status
+        //
+        // Never for UI chrome. Renamed off their old colour names in the orb palette pass:
+        // "green" and "amber" described a scheme this app no longer has, and a token whose
+        // name lies about its value is how the next change puts the wrong colour on screen.
+
+        /// On, enabled, healthy — the cool end of the ramp.
+        static let meterOn = face(light: 0x2F6BE0, dark: 0x8FB8FF)
+        /// Attention — a correction was applied, a value was overridden. Deliberately not the
+        /// accent: the accent means selected, and these two must never be confused.
+        static let meterFlag = face(light: 0xC2456E, dark: 0xFF9CC0)
         /// Over level, destructive.
-        static let meterRed = face(light: 0xE04A34, dark: 0xFF7A66)
+        static let meterHot = face(light: 0xE04A34, dark: 0xFF7A66)
+
+        // MARK: The prism ramp
+
+        /// The wash behind selected transcript text, as the orb's own prism ramp.
+        ///
+        /// The stops are read from `OrbParameters` rather than copied, because the point of
+        /// the selection reading as the orb is that it stays the orb — a second set of
+        /// numbers here would drift the first time the orb is retuned.
+        ///
+        /// Alpha is carried per stop rather than by an opacity modifier so the gradient can
+        /// go straight into an `NSGradient`, which is what draws it.
+        /// Two stops, not three. The warm stop in the middle of the orb's ramp turned every
+        /// selection into a three-colour sweep that read as decoration; violet into pink is
+        /// the same pair the brand gradient uses, and it reads as one wash.
+        static let selectionRamp: [SwiftUI.Color] = [
+            prism(OrbParameters.colorC),
+            prism(OrbParameters.colorB),
+        ]
+
+        /// The ramp at full strength, for gradients that are meant to be seen as colour —
+        /// the record button, the brand sweep, the mesh in the background.
+        static let ramp: [SwiftUI.Color] = [
+            prism(OrbParameters.colorA, alpha: 1),
+            prism(OrbParameters.colorB, alpha: 1),
+            prism(OrbParameters.colorC, alpha: 1),
+        ]
+
+        /// The blue the orb never quite reaches, carried here so the background mesh has
+        /// somewhere cool to fall away to. Violet alone reads as a single flat tint.
+        static let rampCool = face(light: 0x3E7BFF, dark: 0x5A8CFF)
+
+        /// One orb ramp stop.
+        ///
+        /// With no `alpha` it dims itself to sit under text, and the dark appearance gets less
+        /// of it: the same wash that reads as a soft glow behind dark ink is a bright band
+        /// behind light ink, and the text has to stay the thing you're reading.
+        private static func prism(_ stop: SIMD4<Float>, alpha: CGFloat? = nil) -> SwiftUI.Color {
+            SwiftUI.Color(nsColor: NSColor(name: nil) { appearance in
+                let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                let wash = isDark ? DS.Material.selectionWashDark : DS.Material.selectionWashLight
+                return NSColor(
+                    srgbRed: CGFloat(stop.x),
+                    green: CGFloat(stop.y),
+                    blue: CGFloat(stop.z),
+                    alpha: alpha ?? wash
+                )
+            })
+        }
 
         // MARK: Face resolution
 
         /// Resolves to the light or dark value for the current appearance.
         private static func face(light: UInt32, dark: UInt32) -> SwiftUI.Color {
+            face(light: light, lightAlpha: 1, dark: dark, darkAlpha: 1)
+        }
+
+        /// The same, for the translucent surfaces — which is most of them now. Alpha belongs
+        /// in the token rather than at the call site: `.opacity()` on a surface is invisible
+        /// to anyone reading the palette, and two call sites drift immediately.
+        private static func face(
+            light: UInt32,
+            lightAlpha: CGFloat,
+            dark: UInt32,
+            darkAlpha: CGFloat
+        ) -> SwiftUI.Color {
             SwiftUI.Color(nsColor: NSColor(name: nil) { appearance in
                 let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
                 return NSColor(hex: isDark ? dark : light)
+                    .withAlphaComponent(isDark ? darkAlpha : lightAlpha)
             })
+        }
+    }
+
+    // MARK: - Gradient
+
+    /// The two sweeps in the app, both cut from the prism ramp.
+    ///
+    /// Kept as a namespace rather than being written inline, because a gradient assembled at
+    /// the call site is a palette decision hiding in a view — which is exactly how the old
+    /// scheme ended up with three different limes.
+    enum Gradient {
+        /// The brand sweep: violet into pink, running along the element.
+        static var brand: LinearGradient {
+            LinearGradient(
+                colors: [DS.Color.ramp[2], DS.Color.ramp[1]],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
+
+        /// The record fill: hotter, and running down as well as across, so a small pill still
+        /// shows the ramp rather than one flat sample of it.
+        static var record: LinearGradient {
+            LinearGradient(
+                colors: [DS.Color.ramp[1], DS.Color.ramp[2]],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+
+        /// The wash in the window background: four stops of the ramp plus the cool blue,
+        /// blurred to nothing in particular. Deliberately low-contrast — it is a hint of
+        /// colour behind the glass, and anything stronger competes with the transcripts.
+        static var mesh: MeshGradient {
+            MeshGradient(
+                width: 3,
+                height: 3,
+                points: [
+                    [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
+                    [0.0, 0.5], [0.6, 0.45], [1.0, 0.5],
+                    [0.0, 1.0], [0.4, 1.0], [1.0, 1.0],
+                ],
+                colors: [
+                    DS.Color.ramp[2], DS.Color.rampCool, DS.Color.ramp[2],
+                    DS.Color.ramp[1], DS.Color.ramp[2], DS.Color.rampCool,
+                    DS.Color.rampCool, DS.Color.ramp[1], DS.Color.ramp[2],
+                ]
+            )
         }
     }
 
@@ -117,13 +243,6 @@ enum DS {
     /// The small physical constants shared by controls and instrumentation. Kept here so a
     /// meter bar and a button dot can't drift apart.
     enum Material {
-        // Level meter — soft capsule bars rising and falling, no needle.
-        static let barWidth: CGFloat = 4
-        static let barGap: CGFloat = 5
-        static let barMinHeight: CGFloat = 4
-        /// Where nominal level sits along the scale, 0...1. Above this a bar reads hot.
-        static let meterZeroPoint: Double = 0.78
-
         // Status dots
         static let lampSize: CGFloat = 8
         /// A lit dot's soft halo radius. Small — a hint of bloom, not a glow.
@@ -138,6 +257,31 @@ enum DS {
         static let keyTravel: CGFloat = 0.5
         /// How far a button scales down while held.
         static let keyPressScale: CGFloat = 0.97
+
+        // Glass. The window is a real backdrop blur; these are how much colour rides on it.
+        /// How much of the background mesh shows through the glass. A hint, not a wallpaper.
+        static let meshOpacity: Double = 0.30
+        /// How far the mesh is blurred before the glass gets it. Large enough that no stop
+        /// reads as a shape — what should register is colour, not a blob.
+        static let meshBlur: CGFloat = 90
+
+        /// The orb standing in for the level meter, in the transport bar. Its render surface
+        /// carries transparent margin for the bloom, so the orb itself draws smaller.
+        static let transportOrb: CGFloat = 124
+
+        /// The transcript selection wash, per appearance. Prominent enough to find at a
+        /// glance in a wall of history, transparent enough to read through.
+        static let selectionWashLight: CGFloat = 0.74
+        static let selectionWashDark: CGFloat = 0.62
+
+        /// Corner radius on the selection wash. Rounded enough to read as a drawn chip
+        /// rather than a highlighter stroke, and short of the pill a taller radius would make
+        /// of a single line fragment.
+        static let selectionRadius: CGFloat = 7
+
+        /// How strongly a note or warning panel tints its ground. Enough to separate it from
+        /// the surface it sits on, not enough to compete with the text on it.
+        static let noteTint: Double = 0.10
     }
 
     // MARK: - Type
@@ -168,6 +312,27 @@ enum DS {
 
         /// Letter spacing for small labels, in points. Just enough to open them up.
         static let silkscreenTracking: CGFloat = 0.2
+
+        /// AppKit twins of the faces above.
+        ///
+        /// A SwiftUI `Font` cannot be handed to `NSTextView`, and the selectable transcript
+        /// is an `NSTextView` — so the sizes drawn by AppKit are declared here rather than
+        /// left as literals at the call site.
+        enum Native {
+            /// `@MainActor` because `NSFont` isn't `Sendable`; every use of it is on the
+            /// main actor anyway, since it's handed straight to a view.
+            @MainActor static let body = rounded(size: 13, weight: .regular)
+            /// A transcript in the history list. Larger than the chrome around it: this is
+            /// the text you actually read, and it is also the text you have to hit with a
+            /// cursor to correct a word in it.
+            @MainActor static let transcript = rounded(size: 16, weight: .regular)
+
+            private static func rounded(size: CGFloat, weight: NSFont.Weight) -> NSFont {
+                let base = NSFont.systemFont(ofSize: size, weight: weight)
+                guard let descriptor = base.fontDescriptor.withDesign(.rounded) else { return base }
+                return NSFont(descriptor: descriptor, size: size) ?? base
+            }
+        }
 
         private static func rounded(size: CGFloat, weight: SwiftUI.Font.Weight) -> SwiftUI.Font {
             .system(size: size, weight: weight, design: .rounded)
@@ -250,6 +415,10 @@ enum DS {
         static let panel = Animation.easeInOut(duration: 0.24)
         /// A status dot lighting up.
         static let lamp = Animation.easeOut(duration: 0.16)
+
+        /// How long a button holds a "done" label before the thing it was on goes away.
+        /// Long enough to read, short enough not to sit in front of what it's covering.
+        static let confirmationSeconds: Double = 0.9
 
     }
 }
