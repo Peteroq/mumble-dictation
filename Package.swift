@@ -29,6 +29,15 @@ let package = Package(
                 .swiftLanguageMode(.v6)
             ]
         ),
+        // The app target is an executable; SwiftPM can still test it, which is what keeps
+        // `CleanupGuard` — the one piece of the app with a security argument behind it —
+        // under test without carving it into its own module.
+        .testTarget(
+            name: "MumbleTests",
+            dependencies: ["Mumble"],
+            path: "Tests/MumbleTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .testTarget(
             name: "MumbleDictionaryTests",
             dependencies: ["MumbleDictionary"],

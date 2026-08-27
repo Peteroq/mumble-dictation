@@ -41,6 +41,47 @@ enum CleanupTier: String, CaseIterable, Sendable {
     }
 }
 
+/// How far the cleanup pass is allowed to go.
+///
+/// Cleanup used to be one fixed behaviour. It is a dial now because the right amount is a
+/// matter of taste and of what you are dictating: notes to yourself want every word kept,
+/// a message to a colleague wants the grammar fixed.
+///
+/// Each level moves two things together — what the model is told to do, and what
+/// `CleanupGuard` will accept back. Loosening the instructions without loosening the guard
+/// produces a tier that asks for rewriting and then rejects it, falling back to rules every
+/// time; loosening the guard without the instructions gives the model licence it never uses.
+enum CleanupStrength: String, CaseIterable, Sendable {
+    /// Punctuation, capitalisation and spacing. Every word you said is still there.
+    case light
+    /// Also fillers, false starts and spoken self-corrections.
+    case standard
+    /// Also grammar and phrasing: broken sentences are repaired, not just tidied.
+    case polished
+
+    var displayName: String {
+        switch self {
+        case .light: "Light"
+        case .standard: "Standard"
+        case .polished: "Polished"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .light:
+            "Punctuation, capitalisation and spacing only. Every word you said survives."
+        case .standard:
+            "Also removes fillers and false starts, and applies spoken corrections — "
+                + "\"send it Tuesday, actually Wednesday\" becomes \"send it Wednesday\"."
+        case .polished:
+            "Also repairs grammar and tightens phrasing. It still cannot introduce a word "
+                + "you did not say: that check is what stops the model answering your "
+                + "dictation instead of cleaning it."
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class Settings {
@@ -80,6 +121,11 @@ final class Settings {
         didSet { defaults.set(cleanupTier.rawValue, forKey: Keys.cleanupTier) }
     }
 
+    /// How far the cleanup pass may go — punctuation only, through to repairing grammar.
+    var cleanupStrength: CleanupStrength {
+        didSet { defaults.set(cleanupStrength.rawValue, forKey: Keys.cleanupStrength) }
+    }
+
     /// Play a short tick when capture starts and stops.
     var soundEnabled: Bool {
         didSet { defaults.set(soundEnabled, forKey: Keys.soundEnabled) }
@@ -93,6 +139,7 @@ final class Settings {
         static let soundEnabled = "soundEnabled"
         static let engine = "engine"
         static let cleanupTier = "cleanupTier"
+        static let cleanupStrength = "cleanupStrength"
         static let compareMode = "compareMode"
         static let inputDeviceUID = "inputDeviceUID"
     }
@@ -104,6 +151,10 @@ final class Settings {
         engine = SpeechEngineChoice(rawValue: defaults.string(forKey: Keys.engine) ?? "") ?? .apple
         cleanupEnabled = defaults.object(forKey: Keys.cleanupEnabled) as? Bool ?? true
         cleanupTier = CleanupTier(rawValue: defaults.string(forKey: Keys.cleanupTier) ?? "") ?? .rules
+        // Standard by default: it is what cleanup did before this setting existed, so an
+        // upgrade does not quietly change what lands in anyone's documents.
+        cleanupStrength = CleanupStrength(rawValue: defaults.string(forKey: Keys.cleanupStrength) ?? "")
+            ?? .standard
         compareMode = defaults.object(forKey: Keys.compareMode) as? Bool ?? false
         inputDeviceUID = defaults.string(forKey: Keys.inputDeviceUID)
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true

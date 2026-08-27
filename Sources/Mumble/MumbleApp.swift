@@ -23,17 +23,23 @@ struct MumbleApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            // Settings is a page of the main window now, so ⌘, has to route there rather
+            // than open a scene. Replacing the standard item keeps the shortcut and the
+            // menu position; without this the app would show a Settings item that opens
+            // nothing, since there is no longer a `Settings` scene behind it.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    Navigation.shared.section = .settings
+                    NSApp.activate(ignoringOtherApps: true)
+                    NSApp.windows.first { $0.title == "Mumble" }?.makeKeyAndOrderFront(nil)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
             CommandGroup(after: .appInfo) {
                 Button("Reveal Dictionary File") {
                     NSWorkspace.shared.activateFileViewerSelecting([DictionaryStore.fileURL])
                 }
             }
-        }
-
-        // Fully qualified: this app has its own `Settings` type, which otherwise shadows
-        // SwiftUI's settings scene.
-        SwiftUI.Settings {
-            SettingsWindow(controller: delegate.controller)
         }
 
         // Secondary now: status and the hotkey while you're working in another app.
