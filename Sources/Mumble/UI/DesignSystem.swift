@@ -46,6 +46,12 @@ enum DS {
         /// The slightly darker side of a card edge, used where two surfaces meet.
         static let panelShade = face(light: 0x2A2340, lightAlpha: 0.06, dark: 0x000000, darkAlpha: 0.22)
 
+        /// A control's own ground inside a card — the record button, the input picker.
+        /// Darker than the surface it sits on, and deliberately not glass: the card is
+        /// already glass over the window's glass, and a third blur inside it makes a smudge
+        /// rather than a surface.
+        static let sunken = face(light: 0x2A2340, lightAlpha: 0.10, dark: 0x000000, darkAlpha: 0.30)
+
         /// An inset field — search boxes, code wells, anything typed into.
         static let well = face(light: 0xFFFFFF, lightAlpha: 0.46, dark: 0x08070E, darkAlpha: 0.36)
 
@@ -328,6 +334,9 @@ enum DS {
         /// chip you glance at — it spans the foot of the screen and is read while speaking.
         static let transcript = rounded(size: 22, weight: .regular)
         static let bodyEmphasis = rounded(size: 13, weight: .semibold)
+        /// A control's label — the record button, the input picker. Larger than `label`,
+        /// because those two are the card's content rather than its chrome.
+        static let control = rounded(size: 15, weight: .semibold)
         static let title = rounded(size: 20, weight: .semibold)
         /// The app's name in the title strip. Small and quiet on purpose: it sits in the same
         /// 28pt band as the traffic lights, where anything larger stops being chrome.
@@ -398,6 +407,15 @@ enum DS {
         static let window: CGFloat = 32
         /// A full pill. Any value past half the height reads as a capsule; this is explicit.
         static let pill: CGFloat = 999
+
+        /// The radius that keeps an inner corner parallel to the one it sits inside.
+        ///
+        /// An inner corner is the outer corner less the gap between them. Any other value
+        /// leaves the two arcs non-parallel — the gap between them opening or closing as it
+        /// goes round — which is a thing that reads as wrong without ever naming itself.
+        static func concentric(inside outer: CGFloat, gap: CGFloat) -> CGFloat {
+            max(0, outer - gap)
+        }
     }
 
     // MARK: - Border
