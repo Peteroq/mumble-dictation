@@ -22,16 +22,23 @@ final class AudioCapture: @unchecked Sendable {
 
     private var configObserver: NSObjectProtocol?
 
+    /// The device the user pinned Mumble to, by UID, or nil to follow the system default.
+    /// Handed in at `start` rather than read from `Settings` here — this type is not
+    /// main-actor isolated, and the audio thread must not touch it.
+    private nonisolated(unsafe) var preferredDeviceUID: String?
+
     /// - Returns: the device the tap was bound to, or `nil` if CoreAudio had no default input.
     @discardableResult
     func start(
         outputFormat: AVAudioFormat,
+        preferredDeviceUID: String? = nil,
         onBuffer: @escaping @Sendable (AudioChunk) -> Void,
         onLevel: @escaping @Sendable (Float) -> Void,
         onReady: @escaping @Sendable () -> Void = {}
     ) throws -> AudioInputDevice? {
         guard !isRunning else { return AudioInputDevice.systemDefault }
 
+        self.preferredDeviceUID = preferredDeviceUID
         self.onBuffer = onBuffer
         self.onLevel = onLevel
         self.onReady = onReady
@@ -76,11 +83,12 @@ final class AudioCapture: @unchecked Sendable {
     @discardableResult
     private func bindTap(outputFormat: AVAudioFormat) throws -> AudioInputDevice? {
         let input = engine.inputNode
-        let device = AudioInputDevice.systemDefault
 
         // Before anything else: on a rebind the old tap is still installed and still bound
         // to hardware that may have just gone away.
         input.removeTap(onBus: 0)
+
+        let device = pin(input) ?? AudioInputDevice.systemDefault
 
         let nativeFormat = input.outputFormat(forBus: 0)
         // A device mid-renegotiation reports a zero-rate format, and a tap installed against
@@ -103,6 +111,36 @@ final class AudioCapture: @unchecked Sendable {
             native \(nativeFormat.sampleRate)Hz → engine \(outputFormat.sampleRate)Hz
             """)
         return device
+    }
+
+    /// Points the input node at the pinned device, when there is one.
+    ///
+    /// Only ever called with an explicit preference — see the note above about why the
+    /// default case must not go through `setDeviceID`. Failures are not fatal: a pin whose
+    /// device is unplugged, or one mid-negotiation, falls back to the default rather than
+    /// ending the recording, which is the same trade the rebind path already makes.
+    ///
+    /// - Returns: the device the node was pinned to, or nil if it stayed on the default.
+    private func pin(_ input: AVAudioInputNode) -> AudioInputDevice? {
+        guard let preferredDeviceUID else { return nil }
+        guard let device = AudioInputDevice.withUID(preferredDeviceUID) else {
+            Log.audio.error("pinned input is not connected — falling back to the default")
+            return nil
+        }
+
+        // Already there: `setDeviceID` posts a configuration change even when the device is
+        // unchanged, and the engine answers it by tearing the graph down and rebinding. On a
+        // pinned input that fired on every single recording.
+        guard input.auAudioUnit.deviceID != device.id else { return device }
+
+        do {
+            try input.auAudioUnit.setDeviceID(device.id)
+            return device
+        } catch {
+            let reason = error.localizedDescription
+            Log.audio.error("could not pin input to \(device.name, privacy: .public): \(reason, privacy: .public) — falling back to the default")
+            return nil
+        }
     }
 
     /// The engine tears its own graph down when the hardware changes underneath it — a

@@ -54,6 +54,15 @@ final class Settings {
         didSet { defaults.set(engine.rawValue, forKey: Keys.engine) }
     }
 
+    /// The input device Mumble records from, by UID, or nil to follow the system default.
+    ///
+    /// A pin exists for calls: FaceTime or Zoom takes the headset and moves the system
+    /// default around, and dictation should keep working on the laptop mic rather than
+    /// following whatever the call did.
+    var inputDeviceUID: String? {
+        didSet { defaults.set(inputDeviceUID, forKey: Keys.inputDeviceUID) }
+    }
+
     /// Run every engine on each recording and show them side by side, instead of
     /// transcribing with one. Nothing is typed into the focused app in this mode.
     var compareMode: Bool {
@@ -85,6 +94,7 @@ final class Settings {
         static let engine = "engine"
         static let cleanupTier = "cleanupTier"
         static let compareMode = "compareMode"
+        static let inputDeviceUID = "inputDeviceUID"
     }
 
     private init() {
@@ -95,6 +105,7 @@ final class Settings {
         cleanupEnabled = defaults.object(forKey: Keys.cleanupEnabled) as? Bool ?? true
         cleanupTier = CleanupTier(rawValue: defaults.string(forKey: Keys.cleanupTier) ?? "") ?? .rules
         compareMode = defaults.object(forKey: Keys.compareMode) as? Bool ?? false
+        inputDeviceUID = defaults.string(forKey: Keys.inputDeviceUID)
         soundEnabled = defaults.object(forKey: Keys.soundEnabled) as? Bool ?? true
     }
 }

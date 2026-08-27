@@ -23,9 +23,11 @@ struct MainWindow: View {
 
     var body: some View {
         ZStack {
-            DS.Color.chassis.ignoresSafeArea()
+            AppBackground()
 
             VStack(spacing: DS.Space.roomy) {
+                wordmark
+
                 TransportPanel(controller: controller)
 
                 sectionKeys
@@ -41,8 +43,26 @@ struct MainWindow: View {
                 .frame(maxHeight: .infinity)
             }
             .padding(DS.Space.wide)
+            // The title bar is hidden so the glass runs to the top of the window; this is
+            // what keeps the wordmark out from under the traffic lights.
+            .padding(.top, DS.Space.snug)
         }
         .frame(minWidth: 820, minHeight: 600)
+    }
+
+    /// The window's name, drawn in content.
+    ///
+    /// `.hiddenTitleBar` is what keeps the glass running to the top of the window, and it
+    /// takes the window's title with it — so the app had no name on screen anywhere. This
+    /// puts it back without reintroducing a second surface: it sits below the traffic lights
+    /// on the same plane as everything else, at the top of the same column the panels use.
+    private var wordmark: some View {
+        HStack {
+            Text("Mumble")
+                .font(DS.Font.title)
+                .foregroundStyle(DS.Color.ink)
+            Spacer()
+        }
     }
 
     private var sectionKeys: some View {
@@ -83,8 +103,8 @@ private struct TransportPanel: View {
                     ActionButton(
                         title: isRecording ? "Stop" : "Record",
                         systemImage: isRecording ? "stop.fill" : "circle.fill",
-                        isProminent: true,
-                        iconColor: isRecording ? DS.Color.meterRed : DS.Color.accent
+                        isBrand: true,
+                        iconColor: DS.Color.onAccent
                     ) {
                         if isRecording {
                             controller.stopButtonRecording()
@@ -108,10 +128,20 @@ private struct TransportPanel: View {
                     .frame(maxWidth: 200, alignment: .leading)
             }
 
-            VStack(alignment: .leading, spacing: DS.Space.snug) {
-                TextLabel(text: "Level")
-                LevelMeter(level: controller.level, isActive: isRecording)
-                    .frame(width: 180, height: 40)
+            // No "Level" label over it. The orb is the only thing in the bar that moves, and
+            // labelling it costs the one alignment in the row: a caption plus a 124pt orb is
+            // a taller column than any other, which drags every other label off the line.
+            Group {
+                // The orb, not a row of bars: it is already the app's picture of your voice
+                // in the HUD, and two different drawings of one signal is one too many.
+                //
+                // Left running while the window is open rather than only while recording —
+                // paused, an `MTKView` shows its last frame, so an idle transport would be a
+                // frozen orb or an empty slot. At rest the level is near zero and the orb is
+                // correspondingly still.
+                OrbView(level: isRecording ? controller.level : 0, isActive: true)
+                    .frame(width: DS.Material.transportOrb, height: DS.Material.transportOrb)
+                    .allowsHitTesting(false)
             }
 
             VStack(alignment: .leading, spacing: DS.Space.snug) {
@@ -150,6 +180,9 @@ private struct TranscriptionList: View {
     @State private var store = RunStore.shared
     @State private var query = ""
     @State private var isConfirmingClear = false
+    /// The fix being written, if any. Held here rather than on the row because rows are in a
+    /// `LazyVStack` and a sheet attached to one would be torn down when it scrolls away.
+    @State private var fix: TranscriptFix?
 
     private var runs: [DictationRun] {
         let all = store.runs.reversed().map { $0 }
@@ -173,9 +206,13 @@ private struct TranscriptionList: View {
                 ScrollView {
                     LazyVStack(spacing: DS.Space.base) {
                         ForEach(runs) { run in
-                            TranscriptionRow(run: run) {
-                                withAnimation(DS.Motion.panel) { RunLog.delete(run) }
-                            }
+                            TranscriptionRow(
+                                run: run,
+                                onFix: { heard in fix = TranscriptFix(run: run, heard: heard) },
+                                onDelete: {
+                                    withAnimation(DS.Motion.panel) { RunLog.delete(run) }
+                                }
+                            )
                         }
                     }
                     .padding(.horizontal, DS.Space.roomy)
@@ -184,14 +221,18 @@ private struct TranscriptionList: View {
                 footer
             }
         }
+        .sheet(item: $fix) { FixWordSheet(fix: $0) }
     }
 
     private var footer: some View {
         HStack {
             TextLabel(text: "\(store.runs.count) recording\(store.runs.count == 1 ? "" : "s")")
+            // The feature is invisible otherwise: nothing about selectable text says the app
+            // will do something with the selection.
+            TextLabel(text: "Highlight a word to teach the dictionary", color: DS.Color.silkscreen)
             Spacer()
             Button { isConfirmingClear = true } label: {
-                TextLabel(text: "Delete all", color: DS.Color.meterRed)
+                TextLabel(text: "Delete all", color: DS.Color.meterHot)
             }
             .buttonStyle(.plain)
         }
@@ -214,6 +255,8 @@ private struct TranscriptionList: View {
 
 private struct TranscriptionRow: View {
     let run: DictationRun
+    /// The highlighted text, when the user asks for it to be fixed.
+    let onFix: (String) -> Void
     let onDelete: () -> Void
 
     @State private var didCopy = false
@@ -234,11 +277,7 @@ private struct TranscriptionRow: View {
                     .opacity(isHovering ? 1 : 0)
             }
 
-            Text(run.text)
-                .font(DS.Font.body)
-                .foregroundStyle(DS.Color.ink)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            SelectableTranscript(text: run.text, onFix: onFix)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let corrections = run.corrections, !corrections.isEmpty {
@@ -301,7 +340,7 @@ private struct CorrectionBadges: View {
 
     var body: some View {
         HStack(spacing: DS.Space.snug) {
-            TextLabel(text: "Corrected", color: DS.Color.meterAmber)
+            TextLabel(text: "Corrected", color: DS.Color.meterFlag)
             ForEach(corrections, id: \.self) { correction in
                 HStack(spacing: DS.Space.tight) {
                     Text(correction.from)
@@ -320,7 +359,7 @@ private struct CorrectionBadges: View {
                 .font(DS.Font.caption)
                 .padding(.horizontal, DS.Space.snug)
                 .padding(.vertical, DS.Space.tight)
-                .background(DS.Color.meterAmber.opacity(0.10), in: Capsule(style: .continuous))
+                .background(DS.Color.meterFlag.opacity(DS.Material.noteTint), in: Capsule(style: .continuous))
             }
             Spacer()
         }

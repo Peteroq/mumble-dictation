@@ -16,7 +16,10 @@ struct DictationRun: Codable, Sendable, Identifiable {
     let audioSeconds: Double
     /// Release → final text ready. This is the latency you actually feel.
     let processSeconds: Double
-    let text: String
+    /// Mutable because a transcript can be corrected after the fact: teaching the dictionary
+    /// from a past run rewrites that run's text too, so the history shows what the rule you
+    /// just wrote would have produced.
+    var text: String
     /// Shared by every engine that processed the same recording, so the dashboard can
     /// present them as one side-by-side comparison instead of unrelated rows.
     var group: String?
@@ -124,6 +127,16 @@ enum RunLog {
             compareMode: Settings.shared.compareMode,
             key: Settings.shared.pushToTalkKey.displayName
         ).write(to: dashboardURL, atomically: true, encoding: .utf8)
+    }
+
+    /// Replaces one run in place, keeping its position in history.
+    ///
+    /// Used when a correction is taught from a transcript: the rule is added to the
+    /// dictionary *and* applied to the run it came from, so the fix is visible where the
+    /// mistake was noticed rather than only on the next dictation.
+    static func update(_ run: DictationRun) {
+        let runs = load().map { $0.id == run.id ? run : $0 }
+        rewrite(runs)
     }
 
     /// Deletes one run.

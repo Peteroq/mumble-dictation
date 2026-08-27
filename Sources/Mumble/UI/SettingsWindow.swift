@@ -9,8 +9,23 @@ struct SettingsWindow: View {
 
     var body: some View {
         ZStack {
-            DS.Color.chassis.ignoresSafeArea()
+            AppBackground()
 
+            // Scrolls, because the panel list is taller than the window and grows: the
+            // microphone picker alone is one row per connected device. Fixed height with no
+            // scroll view meant the bottom panel — the cleanup tier and its API key field —
+            // was simply unreachable.
+            ScrollView {
+                content
+            }
+            // The glass is the window's, so the scroll view must not paint its own ground
+            // over it.
+            .scrollContentBackground(.hidden)
+        }
+        .frame(width: 560, height: 620)
+    }
+
+    private var content: some View {
             VStack(alignment: .leading, spacing: DS.Space.wide) {
                 panel(label: "Push to talk") {
                     HStack(spacing: DS.Space.snug) {
@@ -27,6 +42,15 @@ struct SettingsWindow: View {
                     }
                     note("Hold this key anywhere to dictate. The window's Record button works "
                         + "regardless of what's focused.")
+                }
+
+                panel(label: "Microphone") {
+                    inputPicker
+                    note(settings.inputDeviceUID == nil
+                        ? "Following the system default, which macOS moves when a headset "
+                            + "connects — including when a call takes it."
+                        : "Pinned. Mumble records from this device whatever the system "
+                            + "default does, so dictation keeps working while you're on a call.")
                 }
 
                 panel(label: "Model") {
@@ -94,12 +118,44 @@ struct SettingsWindow: View {
                     }
                 }
 
-                Spacer()
             }
+            // Leading, so a panel keeps its width when the stack is measured by the scroll
+            // view rather than by a fixed frame.
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(DS.Space.panel)
-        }
-        .frame(width: 560, height: 620)
     }
+
+
+    /// System default plus every connected input.
+    ///
+    /// Rebuilt on each appearance rather than observed: devices come and go, and a stale list
+    /// here is a preference pointing at something unplugged. `AudioCapture` falls back in
+    /// that case, but the picker should not be the thing that causes it.
+    private var inputPicker: some View {
+        VStack(alignment: .leading, spacing: DS.Space.snug) {
+            ActionButton(
+                title: "System default",
+                isEngaged: settings.inputDeviceUID == nil,
+                engagedColor: DS.Color.ink
+            ) {
+                settings.inputDeviceUID = nil
+                controller.reloadInputDevice()
+            }
+
+            ForEach(devices) { device in
+                ActionButton(
+                    title: device.name,
+                    isEngaged: settings.inputDeviceUID == device.uid,
+                    engagedColor: DS.Color.ink
+                ) {
+                    settings.inputDeviceUID = device.uid
+                    controller.reloadInputDevice()
+                }
+            }
+        }
+    }
+
+    private var devices: [AudioInputDevice] { AudioInputDevice.all }
 
     private func panel<Content: View>(
         label: String,

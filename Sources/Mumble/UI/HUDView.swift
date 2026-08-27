@@ -8,8 +8,9 @@ import SwiftUI
 /// face-resolved — `DS.Color.ink` would be near-black on the light face and vanish into the
 /// glass, and the light face's deepened lime would read as muddy against it.
 enum Brand {
-    /// The bright lime, not the light-face value — this always sits on a dark ground.
-    static let accent = Color(red: 0.78, green: 0.95, blue: 0.29)
+    /// The hot end of the orb's prism ramp — this always sits on a dark ground, so it is the
+    /// bright value rather than the deepened light-face one.
+    static let accent = Color(red: 1.0, green: 0.48, blue: 0.72)
     static let accentWarm = Color(red: 0.66, green: 0.58, blue: 1.0)
 
     /// Text on the glass.

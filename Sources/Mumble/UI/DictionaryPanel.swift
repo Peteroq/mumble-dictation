@@ -100,7 +100,7 @@ private struct DictionaryRow: View {
 
     var body: some View {
         HStack(spacing: DS.Space.base) {
-            StatusDot(color: DS.Color.meterGreen, isLit: entry.isEnabled, size: 7)
+            StatusDot(color: DS.Color.meterOn, isLit: entry.isEnabled, size: 7)
 
             TextLabel(text: entry.kind == .correction ? "Fix" : "Term")
                 .frame(width: 36, alignment: .leading)
@@ -132,10 +132,6 @@ private struct DictionaryRow: View {
         .background(
             isHovering ? DS.Color.hover : DS.Color.panel,
             in: dsShape(DS.Radius.control)
-        )
-        .overlay(
-            dsShape(DS.Radius.control)
-                .strokeBorder(DS.Color.seam, lineWidth: DS.Border.hairline)
         )
         .onHover { isHovering = $0 }
     }
@@ -206,7 +202,7 @@ private struct DictionaryEditor: View {
 
             ForEach(warnings) { warning in
                 HStack(alignment: .top, spacing: DS.Space.snug) {
-                    StatusDot(color: DS.Color.meterAmber, isLit: true, size: 7)
+                    StatusDot(color: DS.Color.meterFlag, isLit: true, size: 7)
                         .padding(.top, 3)
                     Text(warning.message)
                         .font(DS.Font.label)
@@ -216,7 +212,7 @@ private struct DictionaryEditor: View {
                 .padding(DS.Space.base)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
-                    DS.Color.meterAmber.opacity(0.10),
+                    DS.Color.meterFlag.opacity(DS.Material.noteTint),
                     in: dsShape(DS.Radius.control)
                 )
             }
@@ -233,7 +229,10 @@ private struct DictionaryEditor: View {
         }
         .padding(DS.Space.panel)
         .frame(width: 500)
-        .background(DS.Color.panel)
+        // The same glass as the window, so a sheet reads as a pane of the app rather than an
+        // opaque card dropped on top of it. `DS.Color.panel` alone is translucent now, which
+        // over a sheet's own shadow reads as a smudge.
+        .background { AppBackground(isDense: true) }
     }
 
     private var kindPicker: some View {

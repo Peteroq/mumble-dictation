@@ -6,8 +6,54 @@ import SwiftUI
 
 // MARK: - Surfaces
 
-/// A card: a soft white plane lifted off the ground by one diffuse shadow and bounded by a
-/// hairline. No gradient, no grain — the lift comes entirely from the shadow.
+/// The window ground: real glass, with the orb's colours drifting behind it.
+///
+/// Three layers, in order. The mesh is the colour, blurred past the point where any stop
+/// reads as a shape. The glass is the backdrop blur that makes the desktop behind the window
+/// part of the surface. The chassis wash on top is what keeps text legible over a bright
+/// wallpaper — without it the whole app is at the mercy of whatever is on screen behind it.
+///
+/// `.ignoresSafeArea` is on the whole stack so the glass runs under the title bar too, which
+/// is the point: the top of the window should be the same surface as the rest of it.
+struct AppBackground: View, Equatable {
+    /// A frost pass, for glass that floats over the app rather than being the app: sheets and
+    /// the selection panel. At window density those read as smudges, because what is behind
+    /// them is text rather than a desktop.
+    ///
+    /// It lightens rather than darkens — a second chassis wash is what turned the selection
+    /// popover into a near-black slab, since chassis is the near-black end of the palette in
+    /// dark appearance and two of them stack to opaque.
+    var isDense = false
+
+    /// Nothing here depends on anything but `isDense`, so nothing here needs redrawing — and
+    /// this view sits under a transport bar that re-evaluates on every level update.
+    nonisolated static func == (lhs: AppBackground, rhs: AppBackground) -> Bool {
+        lhs.isDense == rhs.isDense
+    }
+
+    var body: some View {
+        ZStack {
+            DS.Gradient.mesh
+                .opacity(DS.Material.meshOpacity)
+                .blur(radius: DS.Material.meshBlur)
+                // The blur samples past the edges of the mesh, so it has to be oversized or
+                // the corners fade to nothing and the window ends in four grey triangles.
+                .scaleEffect(1.4)
+
+            Color.clear.glassEffect(.regular, in: Rectangle())
+
+            DS.Color.chassis
+            if isDense { DS.Color.panel }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+/// A card: a tint over the window's glass, lifted by one diffuse shadow.
+///
+/// No border. On an opaque scheme a hairline is what separates a white card from a white
+/// ground; here the card is a different transparency of the same surface, and the value
+/// change is already the edge. Drawing a line as well makes it read as a box.
 struct Card: View {
     var radius: CGFloat = DS.Radius.panel
 
@@ -15,15 +61,11 @@ struct Card: View {
         dsShape(radius)
             .fill(DS.Color.panel)
             .dsShadow(DS.Shadow.panel)
-            .overlay(
-                dsShape(radius)
-                    .strokeBorder(DS.Color.seam, lineWidth: DS.Border.hairline)
-            )
     }
 }
 
-/// An inset field — search boxes, typed-into wells. Sits *into* the surface, so it is a
-/// shade darker than the card with no shadow of its own.
+/// An inset field — search boxes, typed-into wells. Sits *into* the surface, so it is darker
+/// than the card and keeps its hairline: a field has to look like somewhere text goes.
 struct Inset<Content: View>: View {
     var radius: CGFloat = DS.Radius.control
     @ViewBuilder var content: Content
@@ -38,8 +80,8 @@ struct Inset<Content: View>: View {
     }
 }
 
-/// A content tile — the plane a list or transcript sits on. A hair off `Card` so a list
-/// reads as its own surface when nested inside one.
+/// A content tile — the plane a list or transcript sits on. Fainter than `Card` so a list
+/// reads as its own surface when nested inside one, and borderless for the same reason.
 struct Tile<Content: View>: View {
     var radius: CGFloat = DS.Radius.panel
     @ViewBuilder var content: Content
@@ -47,10 +89,6 @@ struct Tile<Content: View>: View {
     var body: some View {
         content
             .background(DS.Color.deck, in: dsShape(radius))
-            .overlay(
-                dsShape(radius)
-                    .strokeBorder(DS.Color.seam, lineWidth: DS.Border.hairline)
-            )
     }
 }
 
@@ -107,6 +145,9 @@ struct ActionButton: View {
     var isEngaged = false
     var engagedColor: Color = DS.Color.accent
     var isProminent = false
+    /// The record control. Same pill, filled with the prism ramp rather than a flat accent —
+    /// the one element in the app that is allowed to be the orb's colours at full strength.
+    var isBrand = false
     /// Tints the icon independently of the label, so a prominent button can carry its state
     /// in the glyph while the pill itself stays at full contrast.
     var iconColor: Color?
@@ -144,18 +185,22 @@ struct ActionButton: View {
     }
 
     private var labelColor: Color {
+        if isBrand { return DS.Color.onAccent }
         if isProminent { return DS.Color.onInk }
         return isEngaged ? engagedColor : DS.Color.ink
     }
 
-    private var fill: Color {
-        if isProminent { return DS.Color.ink }
-        return isEngaged ? DS.Color.selection : DS.Color.cap
+    /// Type-erased because the brand fill is a gradient and the rest are flat colours, and a
+    /// `ShapeStyle` is the only thing the three have in common.
+    private var fill: AnyShapeStyle {
+        if isBrand { return AnyShapeStyle(DS.Gradient.record) }
+        if isProminent { return AnyShapeStyle(DS.Color.ink) }
+        return AnyShapeStyle(isEngaged ? DS.Color.selection : DS.Color.cap)
     }
 
     private var stroke: Color {
-        if isProminent { return .clear }
-        return isEngaged ? DS.Color.selectionEdge : DS.Color.seam
+        if isBrand || isProminent { return .clear }
+        return isEngaged ? DS.Color.selectionEdge : .clear
     }
 
     private var cap: some View {
@@ -170,80 +215,6 @@ struct ActionButton: View {
 }
 
 // MARK: - Instrumentation
-
-/// A level meter drawn as a row of soft capsule bars.
-///
-/// The damping that makes a meter readable — rather than a row strobing at buffer rate —
-/// happens upstream in `DictationController.updateLevel`, so everything here is a pure
-/// function of the smoothed level and the clock.
-struct LevelMeter: View {
-    /// Current input level, 0...1.
-    let level: Float
-    var isActive: Bool
-
-    var body: some View {
-        // Throttled and paused, matching the HUD's waveform. A bare `TimelineView(.animation)`
-        // ticks at display rate — 120Hz here — forever, including while the app sits idle in
-        // the background with this window closed, which is both a constant CPU draw for a
-        // meter reading zero and a stream of calls into a view that may be on its way out.
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isActive)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            Canvas { context, size in
-                draw(in: &context, size: size, at: time)
-            }
-        }
-        .opacity(isActive ? 1 : 0.45)
-        .animation(DS.Motion.lamp, value: isActive)
-    }
-
-    private func draw(in context: inout GraphicsContext, size: CGSize, at time: Double) {
-        let pitch = DS.Material.barWidth + DS.Material.barGap
-        let count = max(1, Int(size.width / pitch))
-
-        // Left-to-right inset so the row of bars stays centered in whatever width it's given.
-        let used = CGFloat(count) * pitch - DS.Material.barGap
-        let originX = (size.width - used) / 2
-
-        for index in 0..<count {
-            let value = barValue(index: index, of: count, at: time)
-            let height = max(DS.Material.barMinHeight, CGFloat(value) * size.height)
-            let x = originX + CGFloat(index) * pitch
-            let rect = CGRect(
-                x: x,
-                y: (size.height - height) / 2,
-                width: DS.Material.barWidth,
-                height: height
-            )
-            let isHot = value >= DS.Material.meterZeroPoint
-            context.fill(
-                Path(roundedRect: rect, cornerRadius: DS.Material.barWidth / 2),
-                with: .color(isHot ? DS.Color.meterRed : DS.Color.meterLamp)
-            )
-        }
-    }
-
-    /// One bar's height, as a pure function of level, position and time.
-    ///
-    /// Stateless on purpose. This used to integrate an attack/release envelope per bar in a
-    /// class held in `@State`, and read that `@State` from inside the `Canvas` draw closure —
-    /// which SwiftUI is free to invoke outside a view update, where reading `@State` is not
-    /// valid. `DictationController` already smooths `level` before it ever gets here, so the
-    /// envelope was smoothing something smooth; the motion it bought is reproduced by the
-    /// per-bar phase offset below, without holding any state to get wrong.
-    private func barValue(index: Int, of count: Int, at time: Double) -> Double {
-        let target = Double(min(max(level, 0), 1))
-
-        // Bars away from center peak slightly lower, so the row reads as a waveform rather
-        // than a block.
-        let distance = abs(Double(index) - Double(count - 1) / 2) / Double(max(count, 2))
-        let shaped = target * (1 - distance * 0.55)
-
-        // Irrational multiplier keeps the offsets from lining up into a visible period.
-        let phase = (Double(index) * 0.618).truncatingRemainder(dividingBy: 1)
-        let wave = 0.5 + 0.5 * sin((time * 3.4 + phase) * 2 * .pi)
-        return shaped * (0.55 + 0.45 * wave)
-    }
-}
 
 /// A monospaced readout — elapsed time, counts.
 struct Readout: View {

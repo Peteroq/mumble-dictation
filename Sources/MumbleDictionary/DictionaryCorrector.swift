@@ -9,6 +9,14 @@ public struct AppliedCorrection: Codable, Hashable, Sendable {
     public let to: String
     /// How many times it fired in this transcript.
     public let count: Int
+
+    /// Public because the app builds these when a correction is taught from a past
+    /// transcript — the memberwise initializer of a public struct is only internal.
+    public init(from: String, to: String, count: Int) {
+        self.from = from
+        self.to = to
+        self.count = count
+    }
 }
 
 /// Rewrites transcribed text using the dictionary's correction pairs.
