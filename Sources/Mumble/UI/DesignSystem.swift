@@ -283,6 +283,10 @@ enum DS {
         static let recordButton: CGFloat = 64
         static let recordButtonCollapsed: CGFloat = 40
 
+        /// The settings glyph, at the card's two heights.
+        static let gearGlyph: CGFloat = 15
+        static let gearGlyphCollapsed: CGFloat = 13
+
         /// How wide the input device name is allowed to get before it truncates.
         static let inputChipWidth: CGFloat = 220
 
@@ -343,10 +347,17 @@ enum DS {
         static let wordmark = rounded(size: 13, weight: .semibold)
 
         /// Readouts and timings. Monospaced so digits don't shift as they tick.
-        static let counter = SwiftUI.Font.system(size: 12, weight: .medium, design: .monospaced)
+        /// The counter's two sizes, as numbers rather than fonts.
+        ///
+        /// The transport card animates between them, and a `Font` cannot be interpolated —
+        /// see `AnimatableFont`. The fonts below are built from these so the two can't drift.
+        static let counterSize: CGFloat = 12
+        static let counterLargeSize: CGFloat = 30
+
+        static let counter = SwiftUI.Font.system(size: counterSize, weight: .medium, design: .monospaced)
             .monospacedDigit()
         /// The large elapsed counter.
-        static let counterLarge = SwiftUI.Font.system(size: 30, weight: .medium, design: .rounded)
+        static let counterLarge = SwiftUI.Font.system(size: counterLargeSize, weight: .medium, design: .rounded)
             .monospacedDigit()
 
         /// Letter spacing for small labels, in points. Just enough to open them up.
