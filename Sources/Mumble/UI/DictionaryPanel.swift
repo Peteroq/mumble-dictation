@@ -21,8 +21,6 @@ struct DictionaryPanel: View {
                 SearchField(text: $query, placeholder: "Search dictionary")
                 addButton
             }
-            .padding(.horizontal, DS.Space.roomy)
-            .padding(.top, DS.Space.roomy)
 
             if entries.isEmpty {
                 EmptyPanel(
@@ -32,23 +30,19 @@ struct DictionaryPanel: View {
                         : "Try a different search."
                 )
             } else {
-                ScrollView {
-                    LazyVStack(spacing: DS.Space.snug) {
-                        ForEach(entries) { entry in
-                            DictionaryRow(
-                                entry: entry,
-                                onEdit: { editing = entry },
-                                onToggle: {
-                                    var updated = entry
-                                    updated.isEnabled.toggle()
-                                    store.update(updated)
-                                },
-                                onDelete: { store.delete(entry) }
-                            )
-                        }
+                LazyVStack(spacing: DS.Space.snug) {
+                    ForEach(entries) { entry in
+                        DictionaryRow(
+                            entry: entry,
+                            onEdit: { editing = entry },
+                            onToggle: {
+                                var updated = entry
+                                updated.isEnabled.toggle()
+                                store.update(updated)
+                            },
+                            onDelete: { store.delete(entry) }
+                        )
                     }
-                    .padding(.horizontal, DS.Space.roomy)
-                    .padding(.bottom, DS.Space.base)
                 }
             }
 
@@ -83,8 +77,6 @@ struct DictionaryPanel: View {
             .buttonStyle(.plain)
             .help(DictionaryStore.fileURL.path)
         }
-        .padding(.horizontal, DS.Space.roomy)
-        .padding(.bottom, DS.Space.roomy)
     }
 }
 

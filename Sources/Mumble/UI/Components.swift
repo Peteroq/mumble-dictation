@@ -80,18 +80,6 @@ struct Inset<Content: View>: View {
     }
 }
 
-/// A content tile — the plane a list or transcript sits on. Fainter than `Card` so a list
-/// reads as its own surface when nested inside one, and borderless for the same reason.
-struct Tile<Content: View>: View {
-    var radius: CGFloat = DS.Radius.panel
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .background(DS.Color.deck, in: dsShape(radius))
-    }
-}
-
 // MARK: - Labels
 
 /// A small label — a group header, a button title, a metadata chip.
