@@ -70,6 +70,42 @@ final class DictionaryStore {
         save()
     }
 
+    /// Adds a correction, or rewrites the existing rule for the same trigger.
+    ///
+    /// Teaching from a transcript goes through here rather than `add`, because the obvious
+    /// way to use the feature is to fix the same mishearing twice — and two rules with the
+    /// same trigger is a dictionary that contradicts itself, where which one wins depends on
+    /// file order.
+    ///
+    /// A disabled rule for the trigger is re-enabled: the user just asked for it.
+    @discardableResult
+    func teach(hear: String, write: String) -> DictionaryEntry {
+        let trigger = hear.trimmingCharacters(in: .whitespacesAndNewlines)
+        let replacement = write.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if var existing = correction(for: trigger) {
+            existing.write = replacement
+            existing.isEnabled = true
+            update(existing)
+            return existing
+        }
+
+        let entry = DictionaryEntry.correction(hear: trigger, write: replacement)
+        add(entry)
+        return entry
+    }
+
+    /// The enabled-or-not correction rule whose trigger is `hear`, if there is one.
+    func correction(for hear: String) -> DictionaryEntry? {
+        let trigger = hear.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trigger.isEmpty else { return nil }
+        return entries.first {
+            $0.kind == .correction
+                && $0.hear.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(trigger) == .orderedSame
+        }
+    }
+
     /// Case- and diacritic-insensitive search across both sides of an entry.
     func filtered(by query: String) -> [DictionaryEntry] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)

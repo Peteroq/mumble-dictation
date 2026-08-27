@@ -26,15 +26,38 @@ func engineForCurrentSetting() -> any TranscriptionEngine {
 final class DictationController {
     enum State: Equatable {
         case idle
+        /// Engine and capture are spinning up.
         case starting
+        /// Capture has started but the device has not delivered a sample yet. Split out
+        /// from `starting` because on a Bluetooth mic this is where the whole wait lives,
+        /// and a state the user can be told about is better than a stall they can't explain.
+        case connecting
         case listening
         case finishing
         case error(String)
 
+        /// Whether a recording is under way. Governs the record button, the level meter and
+        /// the elapsed counter — everything that should stay lit until the utterance is
+        /// genuinely done with.
         var isActive: Bool {
             switch self {
-            case .starting, .listening, .finishing: true
+            case .starting, .connecting, .listening, .finishing: true
             case .idle, .error: false
+            }
+        }
+
+        /// Whether the HUD should be on screen. Deliberately not the same set.
+        ///
+        /// `finishing` is excluded: the key is already up by then, and keeping the band around
+        /// while the engine finalises means the HUD outlives the gesture that summoned it. It
+        /// closes on release instead, and the text lands in the app either way.
+        ///
+        /// `error` is included, which `isActive` is not — the HUD has a case for rendering the
+        /// message and it was never being shown one.
+        var showsHUD: Bool {
+            switch self {
+            case .starting, .connecting, .listening, .error: true
+            case .idle, .finishing: false
             }
         }
     }
@@ -45,8 +68,23 @@ final class DictationController {
     /// Smoothed 0…1 mic level for the waveform.
     private(set) var level: Float = 0
 
+    /// The input device the next recording will use. Follows the system default, so it
+    /// updates the moment AirPods connect rather than at the next launch.
+    private(set) var inputDevice: AudioInputDevice? = AudioInputDevice.systemDefault
+
     private let hotkey = HotkeyMonitor()
+
+    /// Whether the mic is open because the key was tapped twice rather than because it is
+    /// being held. Read by the HUD, which has to say so: with nothing held there is no
+    /// gesture in progress to remind you the mic is live.
+    private(set) var isHandsFree = false
     private let capture = AudioCapture()
+    private let inputObserver = AudioInputObserver()
+
+    /// Fires the connecting cue if the device is still waking up past the grace window.
+    private var connectingTask: Task<Void, Never>?
+    /// Gives up on a device that accepted `start` and then delivered nothing.
+    private var livenessTask: Task<Void, Never>?
     private let makeEngine: @Sendable () -> any TranscriptionEngine
 
     /// Injected only by tests; production reads the setting per-utterance below.
@@ -55,10 +93,11 @@ final class DictationController {
     /// Chosen per-utterance so the menu toggle applies to the very next hold.
     private func makeFormatter() -> any TextFormatter {
         if let formatter { return formatter }
+        let strength = Settings.shared.cleanupStrength
         switch Settings.shared.cleanupTier {
-        case .rules: return RuleBasedFormatter()
-        case .onDevice: return FoundationModelFormatter()
-        case .claude: return ClaudeFormatter()
+        case .rules: return RuleBasedFormatter(strength: strength)
+        case .onDevice: return FoundationModelFormatter(strength: strength)
+        case .claude: return ClaudeFormatter(strength: strength)
         }
     }
 
@@ -90,18 +129,47 @@ final class DictationController {
         self.makeEngine = makeEngine
     }
 
+    /// Re-reads the input preference, so the transport names the right device the moment it
+    /// is picked rather than after the next recording.
+    func reloadInputDevice() {
+        inputDevice = Settings.shared.inputDeviceUID.flatMap(AudioInputDevice.withUID)
+            ?? AudioInputDevice.systemDefault
+    }
+
     // MARK: - Lifecycle
 
     /// - Returns: `false` if the hotkey tap couldn't be installed (missing Accessibility).
     @discardableResult
     func activate() -> Bool {
+        inputObserver.start { [weak self] device in
+            guard let self else { return }
+            // When the input is pinned, the default moving is not news the transport should
+            // report — the whole point of the pin is that a call taking the headset doesn't
+            // change what Mumble records from.
+            let current = Settings.shared.inputDeviceUID.flatMap(AudioInputDevice.withUID) ?? device
+            guard current != inputDevice else { return }
+            inputDevice = current
+            Log.audio.info("input is now \(current?.name ?? "none", privacy: .public)")
+        }
+        // Rendering both cues costs a few milliseconds of arithmetic; paying it here keeps
+        // it out of the gap between key-down and the first word.
+        Feedback.prewarm()
+
         hotkey.key = Settings.shared.pushToTalkKey
         hotkey.onPress = { [weak self] in self?.beginDictation() }
         hotkey.onRelease = { [weak self] in self?.endDictation() }
+        // Only claims hands-free if there is actually a recording to hold open: a double tap
+        // that began on a failed start would otherwise leave the flag set with nothing live.
+        hotkey.onLatch = { [weak self] in
+            guard let self, state.isActive else { return }
+            isHandsFree = true
+        }
+        hotkey.onUnlatch = { [weak self] in self?.endDictation() }
         return hotkey.start()
     }
 
     func deactivate() {
+        inputObserver.stop()
         hotkey.stop()
         cancelDictation()
     }
@@ -138,6 +206,7 @@ final class DictationController {
     private func beginDictation() {
         guard case .idle = state else { return }
         state = .starting
+        isHandsFree = false
         transcript = ""
         holdStarted = Date()
         isComparing = Settings.shared.compareMode
@@ -196,15 +265,20 @@ final class DictationController {
                     return recording
                 }
 
-                try capture.start(
+                let device = try capture.start(
                     outputFormat: format,
+                    preferredDeviceUID: Settings.shared.inputDeviceUID,
                     onBuffer: { chunk in
                         audioContinuation.yield(chunk)
                     },
                     onLevel: { [weak self] level in
                         Task { @MainActor in self?.updateLevel(level) }
+                    },
+                    onReady: { [weak self] in
+                        Task { @MainActor in self?.audioBecameLive() }
                     }
                 )
+                self.inputDevice = device ?? self.inputDevice
 
                 // Bail out if the user already let go while we were spinning up.
                 guard case .starting = self.state else {
@@ -212,8 +286,12 @@ final class DictationController {
                     return
                 }
 
-                self.state = .listening
-                if Settings.shared.soundEnabled { NSSound(named: "Tink")?.play() }
+                // `.listening` is deliberately *not* set here. The engine is running, but a
+                // wireless mic can be several hundred milliseconds away from producing a
+                // sample, and calling that "listening" tells the user to start talking into
+                // audio nobody is recording. `audioBecameLive` promotes the state when the
+                // first buffer actually lands.
+                self.armConnectionFeedback()
 
                 self.consumeTask = Task { @MainActor in
                     do {
@@ -230,12 +308,77 @@ final class DictationController {
         }
     }
 
+    /// Waits out a grace window before admitting the mic isn't ready yet.
+    ///
+    /// The built-in mic delivers its first buffer within a buffer period, so on that path
+    /// this task is cancelled before it ever speaks and the user hears the ready chime
+    /// alone. The whoosh only exists to cover a wait long enough to notice.
+    private func armConnectionFeedback() {
+        connectingTask?.cancel()
+        connectingTask = Task { @MainActor in
+            // 180ms, not 100. A 2048-frame buffer at 48kHz is already ~43ms, and the
+            // built-in mic occasionally takes a couple of those to get going — firing under
+            // that would put a whoosh in front of every recording, which is exactly the
+            // noise this is supposed to avoid. AirPods take several hundred milliseconds,
+            // so the gap between the two cases is wide enough to be safe at this threshold.
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, case .starting = state else { return }
+            state = .connecting
+            if Settings.shared.soundEnabled { Feedback.connecting.play() }
+        }
+
+        livenessTask?.cancel()
+        livenessTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            switch state {
+            case .starting, .connecting:
+                // Five seconds without a single sample is not a slow handshake, it's a
+                // device that isn't going to work. Say which one, since the whole point of
+                // following the system default is that it may not be the one the user
+                // expects.
+                fail("\(inputDevice?.name ?? "The microphone") isn't sending any audio. Pick a different input in Settings ▸ Microphone.")
+            default:
+                break
+            }
+        }
+    }
+
+    /// First real buffer from the device. This — not `engine.start()` returning — is the
+    /// moment it's honest to tell the user to talk.
+    private func audioBecameLive() {
+        connectingTask?.cancel()
+        connectingTask = nil
+        livenessTask?.cancel()
+        livenessTask = nil
+
+        // The user may have released, or the run may have failed, during the handshake.
+        switch state {
+        case .starting, .connecting: break
+        default: return
+        }
+
+        state = .listening
+        if Settings.shared.soundEnabled { Feedback.ready.play() }
+    }
+
+    /// Stops both timers. Every path out of a recording goes through this, or the liveness
+    /// timer fires an error over a run that already finished.
+    private func cancelConnectionFeedback() {
+        connectingTask?.cancel()
+        connectingTask = nil
+        livenessTask?.cancel()
+        livenessTask = nil
+    }
+
     private func endDictation() {
         // `.finishing` is "active", so without this a second press during processing would
         // run the whole tail again — re-reading `transcript` before the first pass cleared
         // it and pasting the same utterance twice. The window is wide: Parakeet transcribes
         // inside `finish()`, and smart cleanup adds up to 4s on top.
         guard state.isActive, state != .finishing else { return }
+        cancelConnectionFeedback()
+        isHandsFree = false
         state = .finishing
         capture.stop()
         level = 0
@@ -249,8 +392,11 @@ final class DictationController {
             recorded = await feedTask?.value ?? []
             feedTask = nil
 
-            await engine?.finish()
-            await consumeTask?.value
+            // Bounded, because these two awaits are the only thing standing between a
+            // wedged engine and a HUD stuck on "Transcribing…" that nothing but quitting
+            // the app can clear.
+            await bounded(6, "engine finish") { [engine] in await engine?.finish() }
+            await bounded(3, "transcript drain") { [consumeTask] in await consumeTask?.value }
             consumeTask = nil
             engine = nil
 
@@ -291,6 +437,7 @@ final class DictationController {
     }
 
     private func cancelDictation() {
+        cancelConnectionFeedback()
         utteranceFormatter = nil
         capture.stop()
         audioContinuation?.finish()
@@ -310,6 +457,7 @@ final class DictationController {
     }
 
     private func teardown() async {
+        cancelConnectionFeedback()
         utteranceFormatter = nil
         capture.stop()
         audioContinuation?.finish()
@@ -428,12 +576,72 @@ final class DictationController {
         self.releasedAt = nil
     }
 
-    /// Light smoothing so the waveform glides instead of strobing at buffer rate.
+    /// Runs `work`, giving up after `seconds` and carrying on without it.
+    ///
+    /// A backstop, not a design — every engine is supposed to return from `finish()`. It
+    /// exists because one of them didn't: handed a session that never received a single
+    /// audio buffer, `SpeechAnalyzer.finalizeAndFinishThroughEndOfInput()` waits forever,
+    /// and the whole app strands mid-utterance. That specific case is fixed at the source,
+    /// but the cost of being wrong here is the user losing the app entirely, which is far
+    /// too high to leave resting on a framework's liveness.
+    ///
+    /// On timeout the work is **abandoned**, not cancelled. Cancelling would not help — the
+    /// hang is inside a framework call that never checks for it — and awaiting the task to
+    /// observe the cancellation is precisely the thing that cannot be done here. A leaked
+    /// task that eventually returns into nothing is the cheap outcome.
+    @discardableResult
+    private func bounded(
+        _ seconds: Double,
+        _ label: String,
+        _ work: @escaping @Sendable () async -> Void
+    ) async -> Bool {
+        let completed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let once = ResumeOnce(continuation)
+            Task.detached(priority: .userInitiated) {
+                await work()
+                once.resume(completed: true)
+            }
+            Task.detached {
+                try? await Task.sleep(for: .seconds(seconds))
+                once.resume(completed: false)
+            }
+        }
+        if !completed {
+            Log.speech.error("\(label, privacy: .public) timed out after \(seconds)s — abandoned")
+        }
+        return completed
+    }
+
+    /// Resumes a continuation exactly once, whichever racer gets there first.
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Bool, Never>?
+
+        init(_ continuation: CheckedContinuation<Bool, Never>) {
+            self.continuation = continuation
+        }
+
+        func resume(completed: Bool) {
+            lock.lock()
+            let pending = continuation
+            continuation = nil
+            lock.unlock()
+            pending?.resume(returning: completed)
+        }
+    }
+
+    /// Smoothing so the orb glides instead of strobing at buffer rate.
+    ///
+    /// Asymmetric on purpose: rise almost immediately, fall back gently. Meter ballistics work
+    /// this way because a symmetric filter averages the peaks away — the level ends up sitting
+    /// near the middle of its range the whole time you are talking, which is exactly what made
+    /// the orb look like it was idling rather than listening.
     private func updateLevel(_ new: Float) {
-        level += (new - level) * 0.35
+        level += (new - level) * (new > level ? 0.62 : 0.16)
     }
 
     private func fail(_ message: String) {
+        cancelConnectionFeedback()
         utteranceFormatter = nil
         Log.app.error("\(message)")
         capture.stop()

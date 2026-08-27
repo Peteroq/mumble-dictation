@@ -1,3 +1,4 @@
+import MumbleCleanup
 import Foundation
 
 /// Cleanup via the Claude API — the optional higher-quality tier above the on-device model.
@@ -9,7 +10,16 @@ import Foundation
 /// unavailability (no key configured, no network) is just another fallback path rather than
 /// a special case.
 struct ClaudeFormatter: TextFormatter {
-    private let fallback = RuleBasedFormatter()
+    /// How far this pass may go. Captured once per utterance rather than read at use, so a
+    /// setting changed mid-dictation cannot land halfway through one transcript.
+    let strength: CleanupStrength
+
+    private let fallback: RuleBasedFormatter
+
+    init(strength: CleanupStrength = .standard) {
+        self.strength = strength
+        fallback = RuleBasedFormatter(strength: strength)
+    }
 
     /// Longer than the on-device tier's 4s — this pass leaves the machine.
     private let timeout: Duration = .seconds(8)
@@ -37,7 +47,8 @@ struct ClaudeFormatter: TextFormatter {
 
         do {
             let cleaned = try await withThrowingTaskGroup(of: String.self) { group in
-                group.addTask { try await Self.clean(trimmed, apiKey: apiKey) }
+                let strength = strength
+                group.addTask { try await Self.clean(trimmed, apiKey: apiKey, strength: strength) }
                 group.addTask {
                     try await Task.sleep(for: timeout)
                     throw CleanupError.timedOut
@@ -48,7 +59,9 @@ struct ClaudeFormatter: TextFormatter {
                 return first
             }
 
-            guard CleanupGuard.isPlausibleCleanup(original: trimmed, cleaned: cleaned) else {
+            guard CleanupGuard.isPlausibleCleanup(
+                original: trimmed, cleaned: cleaned, strength: strength
+            ) else {
                 Log.speech.info("Claude cleanup rejected — using rule-based cleanup")
                 return await fallback.format(trimmed)
             }
@@ -63,7 +76,9 @@ struct ClaudeFormatter: TextFormatter {
         (error as? CleanupError)?.errorDescription ?? error.localizedDescription
     }
 
-    private static func clean(_ text: String, apiKey: String) async throws -> String {
+    private static func clean(
+        _ text: String, apiKey: String, strength: CleanupStrength
+    ) async throws -> String {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
@@ -77,7 +92,7 @@ struct ClaudeFormatter: TextFormatter {
             maxTokens: 1_200,
             // Near-deterministic: this is a formatting pass, not a creative one.
             temperature: 0.1,
-            system: CleanupGuard.instructions,
+            system: CleanupGuard.instructions(for: strength),
             messages: [Message(role: "user", content: "Clean up this transcript:\n\n\(text)")]
         ))
 

@@ -36,11 +36,17 @@ jobs:
       - name: Swift version
         run: swift --version
 
-      # The app target needs macOS 26 and the Speech framework, which the runner image
-      # does not have. The dictionary target is deliberately platform-neutral, so it — and
-      # the contract that matters here — builds and tests anywhere.
-      - name: Test the dictionary target
-        run: swift test --filter VectorTests
+      # Both test targets are deliberately platform-neutral — the dictionary for the
+      # cross-platform contract, the cleanup guard so the check that stops a model
+      # answering your dictation is covered somewhere that isn't a laptop.
+      #
+      # Neither may depend on the app target, and that is a load-bearing rule rather than
+      # tidiness. SwiftPM links every test target into one bundle, so a single test that
+      # reaches the app pulls FoundationModels into it, and the whole bundle then fails to
+      # dlopen on a runner older than the app's deployment target — taking the contract
+      # tests down with it, before a single assertion runs.
+      - name: Test
+        run: swift test
 
       - name: Confirm the vectors on both sides are identical
         run: |

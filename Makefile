@@ -66,7 +66,7 @@ SIGN_ID   := -
 SIGN_NAME := ad-hoc
 endif
 
-.PHONY: all build app run install clean icon signing
+.PHONY: all build app run install clean icon signing doctor
 
 all: app
 
@@ -107,7 +107,8 @@ app: build
 		echo ""; \
 	fi
 
-## Only ever targets the Mumble executable — never the separate `mumble` app.
+## Only ever targets the Mumble executable, by exact name — never another dictation app
+## that happens to be running.
 run: app
 	@pkill -x $(EXEC) 2>/dev/null || true
 	@open "$(BUNDLE)"
@@ -122,6 +123,13 @@ install: app
 	@cp -R "$(BUNDLE)" "/Applications/$(APPNAME)"
 	@open "/Applications/$(APPNAME)"
 	@echo "installed to /Applications/$(APPNAME)"
+	@# Said every time rather than only on first install. Neither permission can be
+	@# requested silently, and an app that is running but deaf and mute looks broken in a
+	@# way that gives no hint what to do about it.
+	@echo ""
+	@echo "  Next: System Settings > Privacy & Security > Accessibility > add Mumble."
+	@echo "        Quit and reopen Mumble, then hold your push-to-talk key and talk."
+	@echo "        The microphone prompt appears on the first recording."
 
 clean:
 	@rm -rf .build "$(STAGE)" "$(SCRATCH)"
@@ -154,3 +162,49 @@ signing:
 	@echo "installed app's requirement:"
 	@codesign -d -r- "/Applications/$(APPNAME)" 2>/dev/null | sed -n 's/^designated => /  /p' \
 		|| echo "  (not installed yet)"
+
+## Preflight for a machine that has never built this before.
+##
+## Everything here is a thing that has actually gone wrong on a fresh Mac: the wrong macOS,
+## no Swift toolchain, `xcode-select` pointed at the Command Line Tools (which cannot build
+## a SwiftUI app), or no signing identity — the last of which builds and installs perfectly
+## and then quietly drops the Accessibility grant an hour later.
+doctor:
+	@echo "Mumble preflight"
+	@echo ""
+	@os=$$(sw_vers -productVersion); major=$$(echo "$$os" | cut -d. -f1); \
+	if [ "$$major" -ge 26 ]; then \
+		echo "  macOS         $$os"; \
+	else \
+		echo "  macOS         $$os  — NEEDS 26 or later"; \
+		echo "                  SpeechAnalyzer and Liquid Glass are both macOS 26 APIs."; \
+	fi
+	@if ! command -v swift >/dev/null 2>&1; then \
+		echo "  Swift         missing — install Xcode from the App Store"; \
+	else \
+		echo "  Swift         $$(swift --version 2>&1 | sed -n 's/.*Apple Swift version \([0-9.]*\).*/\1/p' | head -1)"; \
+	fi
+	@dev=$$(xcode-select -p 2>/dev/null); \
+	case "$$dev" in \
+		*CommandLineTools*) \
+			echo "  Developer dir $$dev"; \
+			echo "                  — this is the Command Line Tools, which cannot build a"; \
+			echo "                    SwiftUI app. Install Xcode, then:"; \
+			echo "                    sudo xcode-select -s /Applications/Xcode.app" ;; \
+		"") echo "  Developer dir missing — install Xcode from the App Store" ;; \
+		*) echo "  Developer dir $$dev" ;; \
+	esac
+	@echo "  Signing       $(SIGN_NAME)"
+	@if [ "$(SIGN_ID)" = "-" ]; then \
+		echo "                  — ad-hoc. The app will work, but macOS drops the"; \
+		echo "                    Accessibility and Microphone grants on every rebuild."; \
+		echo "                    Run 'make signing' for the two ways to fix it."; \
+	fi
+	@if [ -d "/Applications/$(APPNAME)" ]; then \
+		echo "  Installed     /Applications/$(APPNAME)"; \
+	else \
+		echo "  Installed     not yet — run 'make install'"; \
+	fi
+	@echo ""
+	@echo "  Permissions cannot be checked from here: the TCC database is protected."
+	@echo "  After 'make install', grant Accessibility and Microphone, then relaunch."

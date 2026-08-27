@@ -1,16 +1,19 @@
+import MumbleCleanup
 import SwiftUI
 
-/// Settings — hotkey and model, per the brief. Opens on ⌘, via the standard `Settings` scene,
-/// so the system wires up the menu item and the shortcut.
-struct SettingsWindow: View {
+/// Settings — a page of the main window rather than a window of its own.
+///
+/// It was a separate `SwiftUI.Settings` scene, which is the conventional macOS answer and the
+/// wrong one here: every setting on this page changes what the *next dictation* does, and
+/// checking one meant leaving the window that shows you what the last one produced. As a page
+/// it sits beside the transcripts it affects, and it scrolls with the rest of the app rather
+/// than owning a scroll view and a fixed 560×620 frame.
+struct SettingsPanel: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
     @State private var apiKeyInput = APIKeyStore.storedKey ?? ""
 
     var body: some View {
-        ZStack {
-            DS.Color.chassis.ignoresSafeArea()
-
             VStack(alignment: .leading, spacing: DS.Space.wide) {
                 panel(label: "Push to talk") {
                     HStack(spacing: DS.Space.snug) {
@@ -27,6 +30,15 @@ struct SettingsWindow: View {
                     }
                     note("Hold this key anywhere to dictate. The window's Record button works "
                         + "regardless of what's focused.")
+                }
+
+                panel(label: "Microphone") {
+                    inputPicker
+                    note(settings.inputDeviceUID == nil
+                        ? "Following the system default, which macOS moves when a headset "
+                            + "connects — including when a call takes it."
+                        : "Pinned. Mumble records from this device whatever the system "
+                            + "default does, so dictation keeps working while you're on a call.")
                 }
 
                 panel(label: "Model") {
@@ -55,6 +67,29 @@ struct SettingsWindow: View {
                         + "corrections run either way.")
 
                     if settings.cleanupEnabled {
+                        // How far, before which engine does it. The two are independent and
+                        // asking them in this order matches how people decide: you know how
+                        // much help you want long before you care what runs.
+                        VStack(alignment: .leading, spacing: DS.Space.snug) {
+                            TextLabel(text: "How much help")
+                            HStack(spacing: DS.Space.snug) {
+                                ForEach(CleanupStrength.allCases, id: \.self) { level in
+                                    ActionButton(
+                                        title: level.displayName,
+                                        isEngaged: settings.cleanupStrength == level,
+                                        engagedColor: DS.Color.ink
+                                    ) {
+                                        settings.cleanupStrength = level
+                                    }
+                                }
+                            }
+                            note(settings.cleanupStrength.explanation)
+                        }
+                        .padding(.top, DS.Space.tight)
+
+                        Divider().overlay(DS.Color.seam)
+
+                        TextLabel(text: "What runs it")
                         HStack(spacing: DS.Space.snug) {
                             ForEach(CleanupTier.allCases, id: \.self) { tier in
                                 ActionButton(
@@ -94,12 +129,43 @@ struct SettingsWindow: View {
                     }
                 }
 
-                Spacer()
             }
-            .padding(DS.Space.panel)
-        }
-        .frame(width: 560, height: 620)
+            // Leading, so a panel keeps its width when the stack is measured by the page's
+            // scroll view rather than by a fixed frame.
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+
+    /// System default plus every connected input.
+    ///
+    /// Rebuilt on each appearance rather than observed: devices come and go, and a stale list
+    /// here is a preference pointing at something unplugged. `AudioCapture` falls back in
+    /// that case, but the picker should not be the thing that causes it.
+    private var inputPicker: some View {
+        VStack(alignment: .leading, spacing: DS.Space.snug) {
+            ActionButton(
+                title: "System default",
+                isEngaged: settings.inputDeviceUID == nil,
+                engagedColor: DS.Color.ink
+            ) {
+                settings.inputDeviceUID = nil
+                controller.reloadInputDevice()
+            }
+
+            ForEach(devices) { device in
+                ActionButton(
+                    title: device.name,
+                    isEngaged: settings.inputDeviceUID == device.uid,
+                    engagedColor: DS.Color.ink
+                ) {
+                    settings.inputDeviceUID = device.uid
+                    controller.reloadInputDevice()
+                }
+            }
+        }
+    }
+
+    private var devices: [AudioInputDevice] { AudioInputDevice.all }
 
     private func panel<Content: View>(
         label: String,

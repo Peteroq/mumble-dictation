@@ -1,3 +1,4 @@
+import MumbleCleanup
 import Foundation
 
 /// The cleanup pass between raw transcription and injection.
@@ -23,6 +24,10 @@ extension TextFormatter {
 /// Deterministic, zero-latency cleanup. Good enough to be useful on its own and always
 /// the fallback when a model-backed formatter is unavailable or times out.
 struct RuleBasedFormatter: TextFormatter {
+    /// At `light` the fillers stay: that level's promise is that every word you said
+    /// survives, and it has to hold for the tier with no model in it too.
+    var strength: CleanupStrength = .standard
+
     /// Standalone filler words, stripped only when surrounded by word boundaries.
     private static let fillers = ["um", "uh", "erm", "uhm", "hmm", "mhm"]
 
@@ -38,7 +43,7 @@ struct RuleBasedFormatter: TextFormatter {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return text }
 
-        text = stripFillers(from: text)
+        if strength != .light { text = stripFillers(from: text) }
         text = applySpokenPunctuation(to: text)
         text = collapseWhitespace(in: text)
         text = capitalizeSentences(in: text)
