@@ -12,6 +12,8 @@ struct MainWindow: View {
     @Bindable var controller: DictationController
 
     @State private var section: Section = .transcriptions
+    /// Whether the page has been scrolled far enough to shrink the transport card.
+    @State private var isCollapsed = false
 
     enum Section: String, CaseIterable, Identifiable {
         case transcriptions
@@ -26,14 +28,11 @@ struct MainWindow: View {
             AppBackground()
 
             // One scroll view for the whole page, not a fixed header over a scrolling well.
-            // The transport card is worth a glance, not a permanent third of the window, and
-            // a list that scrolls inside a frame inside a window gives you a small porthole
+            // A list that scrolls inside a frame inside a window gives you a small porthole
             // onto a long history — the thing you spend the most time reading gets the least
-            // room. Everything travels together now, and the card leaves as you read.
+            // room.
             ScrollView {
                 VStack(spacing: DS.Space.roomy) {
-                    TransportPanel(controller: controller)
-
                     sectionKeys
 
                     switch section {
@@ -41,18 +40,52 @@ struct MainWindow: View {
                     case .dictionary: DictionaryPanel()
                     }
                 }
-                .padding(DS.Space.wide)
-                // The title bar is hidden so the glass runs to the top of the window; this is
-                // what keeps the transport card out from under the traffic lights.
-                .padding(.top, DS.Space.snug)
+                .padding(.horizontal, DS.Space.wide)
+                .padding(.bottom, DS.Space.wide)
             }
-
-            titleVeil
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top
+            } action: { _, travelled in
+                // Hysteresis: 28pt of travel to collapse, and back within 8pt of the top to
+                // come out of it. A single threshold flaps on whichever pixel it lands on.
+                let next = travelled > (isCollapsed ? 8 : 28)
+                guard next != isCollapsed else { return }
+                withAnimation(DS.Motion.panel) { isCollapsed = next }
+            }
+            // The card rides above the page rather than in it, so Record, the input and the
+            // clock are reachable however far down the history you are.
+            .safeAreaInset(edge: .top, spacing: 0) { header }
         }
         .frame(minWidth: 820, minHeight: 600)
         // Zero-sized: this draws nothing itself, it just gets at the window so the wordmark
         // can be hung in the title bar.
         .background { TitlebarWordmark().frame(width: 0, height: 0) }
+    }
+
+    /// The transport card, pinned above the page.
+    ///
+    /// The container's height is constant whatever the card is doing, because this *is* the
+    /// scroll view's top inset: an inset that shrank as the card collapsed would move the
+    /// content, which would move the scroll offset, which would decide to expand the card
+    /// again. The card and its veil shrink inside a frame that never moves.
+    private var header: some View {
+        Color.clear
+            .frame(height: DS.Space.wide + DS.Space.snug
+                   + DS.Material.transportHeight + DS.Space.roomy)
+            .overlay(alignment: .top) {
+                ZStack(alignment: .top) {
+                    titleVeil
+                    TransportPanel(controller: controller, isCollapsed: isCollapsed)
+                        .padding(.horizontal, DS.Space.wide)
+                        .padding(.top, cardInset)
+                }
+            }
+    }
+
+    /// How far the card sits below the title strip. Tighter when collapsed — a 52pt card under
+    /// 42pt of empty glass reads as a card that failed to load.
+    private var cardInset: CGFloat {
+        isCollapsed ? DS.Space.snug : DS.Space.wide + DS.Space.snug
     }
 
     /// Keeps the title strip legible once the page scrolls under it.
@@ -63,16 +96,20 @@ struct MainWindow: View {
     /// hidden bar would have had, faded out rather than cut off, so it reads as the glass
     /// thickening toward the top of the window instead of as a seam across it.
     private var titleVeil: some View {
-        ZStack {
+        let card = isCollapsed ? DS.Material.transportCollapsed : DS.Material.transportHeight
+        let solid = cardInset + card
+        let height = solid + (isCollapsed ? DS.Material.transportFade : DS.Space.roomy)
+
+        return ZStack {
             Color.clear.glassEffect(.regular, in: Rectangle())
             DS.Color.chassis
         }
-        .frame(height: DS.Material.titleVeil)
+        .frame(height: height)
         .mask(
             LinearGradient(
                 stops: [
                     .init(color: .black, location: 0),
-                    .init(color: .black, location: 0.45),
+                    .init(color: .black, location: solid / height),
                     .init(color: .clear, location: 1),
                 ],
                 startPoint: .top,
@@ -80,7 +117,7 @@ struct MainWindow: View {
             )
         )
         .allowsHitTesting(false)
-        .ignoresSafeArea()
+        .ignoresSafeArea(edges: .top)
     }
 
     private var sectionKeys: some View {
@@ -158,8 +195,14 @@ private struct TitlebarWordmark: NSViewRepresentable {
 // MARK: - Transport
 
 /// Record / stop, the level meter, and the counter.
+///
+/// Two shapes, one row. Expanded it is a card with a caption over every value; collapsed it is
+/// a single 52pt line of the same four things, because what you need while reading back a
+/// hundred transcripts is to still be able to hit Record — not to be told which control is
+/// which. Nothing is dropped on the way down, only the labels and the room around them.
 private struct TransportPanel: View {
     @Bindable var controller: DictationController
+    var isCollapsed: Bool
 
     @State private var elapsed: TimeInterval = 0
     @State private var startedAt: Date?
@@ -167,65 +210,15 @@ private struct TransportPanel: View {
     private var isRecording: Bool { controller.state.isActive }
 
     var body: some View {
-        HStack(spacing: DS.Space.wide) {
-            VStack(alignment: .leading, spacing: DS.Space.snug) {
-                TextLabel(text: "Transport")
-                HStack(spacing: DS.Space.snug) {
-                    // One prominent style in both states — the pill stays ink so the label
-                    // is always at full contrast, and the glyph carries the state: the
-                    // accent to arm, the destructive coral to stop.
-                    ActionButton(
-                        title: isRecording ? "Stop" : "Record",
-                        systemImage: isRecording ? "stop.fill" : "circle.fill",
-                        isBrand: true,
-                        iconColor: DS.Color.onAccent
-                    ) {
-                        if isRecording {
-                            controller.stopButtonRecording()
-                        } else {
-                            controller.startButtonRecording()
-                        }
-                    }
-
-                    HStack(spacing: DS.Space.tight) {
-                        StatusDot(color: DS.Color.record, isLit: isRecording)
-                        TextLabel(text: isRecording ? "Live" : "Idle")
-                    }
-                    .padding(.leading, DS.Space.tight)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: DS.Space.snug) {
-                TextLabel(text: "Input")
-                Readout(text: controller.inputDevice?.name ?? "No microphone")
-                    .lineLimit(1)
-                    .frame(maxWidth: 200, alignment: .leading)
-            }
-
-            // No "Level" label over it. The orb is the only thing in the bar that moves, and
-            // labelling it costs the one alignment in the row: a caption plus the orb is
-            // a taller column than any other, which drags every other label off the line.
-            Group {
-                // The orb, not a row of bars: it is already the app's picture of your voice
-                // in the HUD, and two different drawings of one signal is one too many.
-                //
-                // Left running while the window is open rather than only while recording —
-                // paused, an `MTKView` shows its last frame, so an idle transport would be a
-                // frozen orb or an empty slot. At rest the level is near zero and the orb is
-                // correspondingly still.
-                OrbView(level: isRecording ? controller.level : 0, isActive: true)
-                    .frame(width: DS.Material.transportOrb, height: DS.Material.transportOrb)
-                    .allowsHitTesting(false)
-            }
-
-            VStack(alignment: .leading, spacing: DS.Space.snug) {
-                TextLabel(text: "Elapsed")
-                Readout(text: counterText, large: true)
-            }
-
+        HStack(spacing: isCollapsed ? DS.Space.base : DS.Space.wide) {
+            transport
+            input
+            orb
+            counter
             Spacer()
         }
-        .padding(DS.Space.base)
+        .padding(.horizontal, DS.Space.base)
+        .frame(height: isCollapsed ? DS.Material.transportCollapsed : DS.Material.transportHeight)
         .background(Card())
         .onChange(of: controller.state.isActive) { _, active in
             startedAt = active ? Date() : nil
@@ -240,12 +233,86 @@ private struct TransportPanel: View {
         }
     }
 
+    private var transport: some View {
+        VStack(alignment: .leading, spacing: DS.Space.snug) {
+            caption("Transport")
+            HStack(spacing: DS.Space.snug) {
+                // One prominent style in both states — the pill stays ink so the label
+                // is always at full contrast, and the glyph carries the state: the
+                // accent to arm, the destructive coral to stop.
+                ActionButton(
+                    title: isRecording ? "Stop" : "Record",
+                    systemImage: isRecording ? "stop.fill" : "circle.fill",
+                    isBrand: true,
+                    iconColor: DS.Color.onAccent
+                ) {
+                    if isRecording {
+                        controller.stopButtonRecording()
+                    } else {
+                        controller.startButtonRecording()
+                    }
+                }
+
+                HStack(spacing: DS.Space.tight) {
+                    StatusDot(color: DS.Color.record, isLit: isRecording)
+                    TextLabel(text: isRecording ? "Live" : "Idle")
+                }
+                .padding(.leading, DS.Space.tight)
+            }
+        }
+    }
+
+    private var input: some View {
+        VStack(alignment: .leading, spacing: DS.Space.snug) {
+            caption("Input")
+            Readout(text: controller.inputDevice?.name ?? "No microphone")
+                .lineLimit(1)
+                .frame(maxWidth: 200, alignment: .leading)
+        }
+    }
+
+    // No "Level" label over it. The orb is the only thing in the bar that moves, and
+    // labelling it costs the one alignment in the row: a caption plus the orb is
+    // a taller column than any other, which drags every other label off the line.
+    private var orb: some View {
+        // The orb, not a row of bars: it is already the app's picture of your voice
+        // in the HUD, and two different drawings of one signal is one too many.
+        //
+        // Left running while the window is open rather than only while recording —
+        // paused, an `MTKView` shows its last frame, so an idle transport would be a
+        // frozen orb or an empty slot. At rest the level is near zero and the orb is
+        // correspondingly still.
+        OrbView(level: isRecording ? controller.level : 0, isActive: true)
+            .frame(width: orbSize, height: orbSize)
+            .allowsHitTesting(false)
+    }
+
+    private var orbSize: CGFloat {
+        isCollapsed ? DS.Material.transportOrbCollapsed : DS.Material.transportOrb
+    }
+
+    private var counter: some View {
+        VStack(alignment: .leading, spacing: DS.Space.snug) {
+            caption("Elapsed")
+            Readout(text: counterText, large: !isCollapsed)
+        }
+    }
+
+    /// A caption over a value, in the expanded card only. At 52pt there is no room for one,
+    /// and a row that never changes shape is legible without them.
+    @ViewBuilder private func caption(_ text: String) -> some View {
+        if !isCollapsed {
+            TextLabel(text: text)
+        }
+    }
+
     /// Minutes and seconds, zero-padded.
     private var counterText: String {
         let total = Int(elapsed)
         return String(format: "%02d:%02d", total / 60, total % 60)
     }
 }
+
 
 // MARK: - Transcriptions
 

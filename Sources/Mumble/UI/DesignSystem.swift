@@ -268,10 +268,20 @@ enum DS {
         /// The orb standing in for the level meter, in the transport bar. Its render surface
         /// carries transparent margin for the bloom, so the orb itself draws smaller.
         static let transportOrb: CGFloat = 96
+        /// The orb once the card collapses. Small, but still the only moving thing in the row.
+        static let transportOrbCollapsed: CGFloat = 44
 
-        /// How far the glass at the top of the window thickens before it fades away, veiling
-        /// the page as it scrolls under the traffic lights.
-        static let titleVeil: CGFloat = 68
+        /// The transport card's two heights. Fixed rather than left to the content, because
+        /// the expanded one is also the scroll view's top inset and the collapsed one is what
+        /// the veil above the page is sized from.
+        static let transportHeight: CGFloat = 132
+        static let transportCollapsed: CGFloat = 52
+
+        /// How far the veil fades out below the collapsed card. Long, because everything
+        /// passing under a pinned card should dissolve into it rather than slide out sharp.
+        /// Expanded there is nothing under the card to dissolve, and a fade this long would
+        /// reach the top of the page and dim it, so the short one is used there.
+        static let transportFade: CGFloat = 56
 
         /// How much room an empty list keeps for itself, so "No recordings" reads as an empty
         /// page rather than as a stray line of text.
