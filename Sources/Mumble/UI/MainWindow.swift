@@ -11,7 +11,7 @@ import SwiftUI
 struct MainWindow: View {
     @Bindable var controller: DictationController
 
-    @State private var section: Section = .transcriptions
+    @State private var navigation = Navigation.shared
     /// Whether the page has been scrolled far enough to shrink the transport card.
     @State private var isCollapsed = false
 
@@ -19,6 +19,11 @@ struct MainWindow: View {
         case transcriptions
         case prompts
         case dictionary
+        /// Reached from the gear on the transport card or ⌘,, never from the pill row —
+        /// settings is somewhere you go and come back from, not a fourth place to be.
+        case settings
+
+        static let tabs: [Section] = [.transcriptions, .prompts, .dictionary]
 
         var id: String { rawValue }
 
@@ -27,6 +32,7 @@ struct MainWindow: View {
             case .transcriptions: "Transcriptions"
             case .prompts: "Prompts"
             case .dictionary: "Dictionary"
+            case .settings: "Settings"
             }
         }
     }
@@ -43,10 +49,11 @@ struct MainWindow: View {
                 VStack(spacing: DS.Space.roomy) {
                     sectionKeys
 
-                    switch section {
+                    switch navigation.section {
                     case .transcriptions: TranscriptionList()
                     case .prompts: PromptsPanel()
                     case .dictionary: DictionaryPanel()
+                    case .settings: SettingsPanel(controller: controller)
                     }
                 }
                 .padding(.horizontal, DS.Space.wide)
@@ -84,7 +91,21 @@ struct MainWindow: View {
             .overlay(alignment: .top) {
                 ZStack(alignment: .top) {
                     titleVeil
-                    TransportPanel(controller: controller, isCollapsed: isCollapsed)
+                    TransportPanel(
+                        controller: controller,
+                        isCollapsed: isCollapsed,
+                        isShowingSettings: navigation.section == .settings,
+                        onSettings: {
+                            withAnimation(DS.Motion.panel) {
+                                // A toggle, so the gear is also the way back out. Landing on
+                                // Transcriptions rather than wherever you were is deliberate:
+                                // remembering costs a stored section for a trip that is
+                                // almost always one setting long.
+                                navigation.section =
+                                    navigation.section == .settings ? .transcriptions : .settings
+                            }
+                        }
+                    )
                         .padding(.horizontal, DS.Space.wide)
                         .padding(.top, cardInset)
                 }
@@ -131,13 +152,13 @@ struct MainWindow: View {
 
     private var sectionKeys: some View {
         HStack(spacing: DS.Space.snug) {
-            ForEach(Section.allCases) { candidate in
+            ForEach(Section.tabs) { candidate in
                 ActionButton(
                     title: candidate.title,
-                    isEngaged: section == candidate,
+                    isEngaged: navigation.section == candidate,
                     engagedColor: DS.Color.ink
                 ) {
-                    withAnimation(DS.Motion.panel) { section = candidate }
+                    withAnimation(DS.Motion.panel) { navigation.section = candidate }
                 }
             }
             Spacer()
@@ -216,6 +237,8 @@ private struct TitlebarWordmark: NSViewRepresentable {
 private struct TransportPanel: View {
     @Bindable var controller: DictationController
     var isCollapsed: Bool
+    var isShowingSettings: Bool
+    var onSettings: () -> Void
 
     @State private var settings = Settings.shared
     @State private var elapsed: TimeInterval = 0
@@ -230,6 +253,7 @@ private struct TransportPanel: View {
             Readout(text: counterText, large: !isCollapsed)
             input
             Spacer()
+            settingsButton
         }
         // The padding is the gap the inner radii are cut against, so it has to be the same
         // on every side — see `insetRadius`.
@@ -323,6 +347,24 @@ private struct TransportPanel: View {
     /// looking at competing with its own button.
     private var ground: some View {
         dsShape(insetRadius).fill(DS.Color.sunken)
+    }
+
+    /// The way into settings, and back out of it.
+    ///
+    /// On the card rather than in the tab row because it is chrome, not a place: the three
+    /// tabs are things you keep, and this is a trip you make to change one value.
+    private var settingsButton: some View {
+        Button(action: onSettings) {
+            Image(systemName: "gearshape")
+                .font(.system(size: isCollapsed ? 13 : 15, weight: .medium))
+                .foregroundStyle(isShowingSettings ? DS.Color.ink : DS.Color.inkSecondary)
+                .frame(width: buttonHeight, height: buttonHeight)
+                .background {
+                    dsShape(insetRadius).fill(isShowingSettings ? DS.Color.sunken : .clear)
+                }
+        }
+        .buttonStyle(.plain)
+        .help("Settings")
     }
 
     // MARK: The readouts

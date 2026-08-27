@@ -1,31 +1,18 @@
 import SwiftUI
 
-/// Settings — hotkey and model, per the brief. Opens on ⌘, via the standard `Settings` scene,
-/// so the system wires up the menu item and the shortcut.
-struct SettingsWindow: View {
+/// Settings — a page of the main window rather than a window of its own.
+///
+/// It was a separate `SwiftUI.Settings` scene, which is the conventional macOS answer and the
+/// wrong one here: every setting on this page changes what the *next dictation* does, and
+/// checking one meant leaving the window that shows you what the last one produced. As a page
+/// it sits beside the transcripts it affects, and it scrolls with the rest of the app rather
+/// than owning a scroll view and a fixed 560×620 frame.
+struct SettingsPanel: View {
     @Bindable var controller: DictationController
     @State private var settings = Settings.shared
     @State private var apiKeyInput = APIKeyStore.storedKey ?? ""
 
     var body: some View {
-        ZStack {
-            AppBackground()
-
-            // Scrolls, because the panel list is taller than the window and grows: the
-            // microphone picker alone is one row per connected device. Fixed height with no
-            // scroll view meant the bottom panel — the cleanup tier and its API key field —
-            // was simply unreachable.
-            ScrollView {
-                content
-            }
-            // The glass is the window's, so the scroll view must not paint its own ground
-            // over it.
-            .scrollContentBackground(.hidden)
-        }
-        .frame(width: 560, height: 620)
-    }
-
-    private var content: some View {
             VStack(alignment: .leading, spacing: DS.Space.wide) {
                 panel(label: "Push to talk") {
                     HStack(spacing: DS.Space.snug) {
@@ -79,6 +66,29 @@ struct SettingsWindow: View {
                         + "corrections run either way.")
 
                     if settings.cleanupEnabled {
+                        // How far, before which engine does it. The two are independent and
+                        // asking them in this order matches how people decide: you know how
+                        // much help you want long before you care what runs.
+                        VStack(alignment: .leading, spacing: DS.Space.snug) {
+                            TextLabel(text: "How much help")
+                            HStack(spacing: DS.Space.snug) {
+                                ForEach(CleanupStrength.allCases, id: \.self) { level in
+                                    ActionButton(
+                                        title: level.displayName,
+                                        isEngaged: settings.cleanupStrength == level,
+                                        engagedColor: DS.Color.ink
+                                    ) {
+                                        settings.cleanupStrength = level
+                                    }
+                                }
+                            }
+                            note(settings.cleanupStrength.explanation)
+                        }
+                        .padding(.top, DS.Space.tight)
+
+                        Divider().overlay(DS.Color.seam)
+
+                        TextLabel(text: "What runs it")
                         HStack(spacing: DS.Space.snug) {
                             ForEach(CleanupTier.allCases, id: \.self) { tier in
                                 ActionButton(
@@ -119,10 +129,9 @@ struct SettingsWindow: View {
                 }
 
             }
-            // Leading, so a panel keeps its width when the stack is measured by the scroll
-            // view rather than by a fixed frame.
+            // Leading, so a panel keeps its width when the stack is measured by the page's
+            // scroll view rather than by a fixed frame.
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(DS.Space.panel)
     }
 
 

@@ -93,10 +93,11 @@ final class DictationController {
     /// Chosen per-utterance so the menu toggle applies to the very next hold.
     private func makeFormatter() -> any TextFormatter {
         if let formatter { return formatter }
+        let strength = Settings.shared.cleanupStrength
         switch Settings.shared.cleanupTier {
-        case .rules: return RuleBasedFormatter()
-        case .onDevice: return FoundationModelFormatter()
-        case .claude: return ClaudeFormatter()
+        case .rules: return RuleBasedFormatter(strength: strength)
+        case .onDevice: return FoundationModelFormatter(strength: strength)
+        case .claude: return ClaudeFormatter(strength: strength)
         }
     }
 
