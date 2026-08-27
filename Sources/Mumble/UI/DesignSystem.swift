@@ -265,16 +265,25 @@ enum DS {
         /// reads as a shape — what should register is colour, not a blob.
         static let meshBlur: CGFloat = 90
 
-        /// The orb standing in for the level meter, in the transport bar. Its render surface
-        /// carries transparent margin for the bloom, so the orb itself draws smaller.
-        static let transportOrb: CGFloat = 96
+        /// The orb inside the record button — it is the button's glyph, not a separate
+        /// instrument. Its render surface carries transparent margin for the bloom, so the orb
+        /// itself draws smaller than the frame.
+        static let transportOrb: CGFloat = 52
         /// The orb once the card collapses. Small, but still the only moving thing in the row.
-        static let transportOrbCollapsed: CGFloat = 44
+        static let transportOrbCollapsed: CGFloat = 32
+
+        /// The record button's two heights. Taller than an `ActionButton`, because it carries
+        /// the orb rather than an 11pt glyph.
+        static let recordButton: CGFloat = 64
+        static let recordButtonCollapsed: CGFloat = 40
+
+        /// How wide the input device name is allowed to get before it truncates.
+        static let inputChipWidth: CGFloat = 220
 
         /// The transport card's two heights. Fixed rather than left to the content, because
         /// the expanded one is also the scroll view's top inset and the collapsed one is what
         /// the veil above the page is sized from.
-        static let transportHeight: CGFloat = 132
+        static let transportHeight: CGFloat = 96
         static let transportCollapsed: CGFloat = 52
 
         /// How far the veil fades out below the collapsed card. Long, because everything

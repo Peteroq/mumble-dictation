@@ -196,25 +196,29 @@ private struct TitlebarWordmark: NSViewRepresentable {
 
 /// Record / stop, the level meter, and the counter.
 ///
-/// Two shapes, one row. Expanded it is a card with a caption over every value; collapsed it is
-/// a single 52pt line of the same four things, because what you need while reading back a
-/// hundred transcripts is to still be able to hit Record — not to be told which control is
-/// which. Nothing is dropped on the way down, only the labels and the room around them.
+/// Three objects on a row, each one carrying its own label. The captions over them are gone:
+/// "Transport" over a Record button, "Input" over a device name and "Elapsed" over a clock all
+/// name what the thing below already says, and three of them across the top of the window was
+/// most of what made the card tall.
+///
+/// The orb has moved inside the button. It was sitting apart from the control it describes,
+/// which meant the one moving thing in the app was decoration; in the button it is the record
+/// glyph, and it is lit by your own voice.
 private struct TransportPanel: View {
     @Bindable var controller: DictationController
     var isCollapsed: Bool
 
     @State private var elapsed: TimeInterval = 0
     @State private var startedAt: Date?
+    @State private var isPressed = false
 
     private var isRecording: Bool { controller.state.isActive }
 
     var body: some View {
-        HStack(spacing: isCollapsed ? DS.Space.base : DS.Space.wide) {
-            transport
+        HStack(spacing: DS.Space.base) {
+            recordButton
+            Readout(text: counterText, large: !isCollapsed)
             input
-            orb
-            counter
             Spacer()
         }
         .padding(.horizontal, DS.Space.base)
@@ -233,77 +237,81 @@ private struct TransportPanel: View {
         }
     }
 
-    private var transport: some View {
-        VStack(alignment: .leading, spacing: DS.Space.snug) {
-            caption("Transport")
-            HStack(spacing: DS.Space.snug) {
-                // One prominent style in both states — the pill stays ink so the label
-                // is always at full contrast, and the glyph carries the state: the
-                // accent to arm, the destructive coral to stop.
-                ActionButton(
-                    title: isRecording ? "Stop" : "Record",
-                    systemImage: isRecording ? "stop.fill" : "circle.fill",
-                    isBrand: true,
-                    iconColor: DS.Color.onAccent
-                ) {
-                    if isRecording {
-                        controller.stopButtonRecording()
-                    } else {
-                        controller.startButtonRecording()
-                    }
-                }
+    // MARK: The record control
 
-                HStack(spacing: DS.Space.tight) {
-                    StatusDot(color: DS.Color.record, isLit: isRecording)
-                    TextLabel(text: isRecording ? "Live" : "Idle")
-                }
-                .padding(.leading, DS.Space.tight)
+    /// The orb is the glyph. There is no separate lamp beside it any more: a still orb is idle
+    /// and a moving one is live, which is a better indicator than a dot with a word next to it
+    /// because it also tells you the microphone is hearing something.
+    private var recordButton: some View {
+        Button {
+            if isRecording {
+                controller.stopButtonRecording()
+            } else {
+                controller.startButtonRecording()
             }
+        } label: {
+            // No spacing, and no leading padding: the orb's render surface carries
+            // transparent margin for its bloom, so it supplies its own gap on both sides.
+            // Adding more put the glyph adrift in the middle of the capsule.
+            HStack(spacing: 0) {
+                // Left running while the window is open rather than only while recording —
+                // paused, an `MTKView` shows its last frame, so an idle transport would be a
+                // frozen orb or an empty slot. At rest the level is near zero and the orb is
+                // correspondingly still.
+                OrbView(level: isRecording ? controller.level : 0, isActive: true)
+                    .frame(width: orbSize, height: orbSize)
+                    .allowsHitTesting(false)
+                TextLabel(text: isRecording ? "Stop" : "Record", color: DS.Color.ink)
+            }
+            .padding(.trailing, DS.Space.base)
+            .frame(height: buttonHeight)
+            .background(cap)
+            .scaleEffect(isPressed ? DS.Material.keyPressScale : 1)
+            .offset(y: isPressed ? DS.Material.keyTravel : 0)
+        }
+        .buttonStyle(.plain)
+        .onLongPressGesture(minimumDuration: 0) {} onPressingChanged: { pressing in
+            withAnimation(pressing ? DS.Motion.press : DS.Motion.release) { isPressed = pressing }
         }
     }
 
+    /// Glass with a well tint over it, rather than the prism ramp the pill used to carry. The
+    /// orb inside is already the app's colour at full strength, and a saturated fill behind it
+    /// left the one thing worth looking at competing with its own button.
+    private var cap: some View {
+        Capsule(style: .continuous)
+            .fill(DS.Color.well)
+            .dsShadow(isPressed ? DS.Shadow.pressed : DS.Shadow.raised)
+            .background {
+                Color.clear.glassEffect(.regular, in: Capsule(style: .continuous))
+            }
+    }
+
+    // MARK: The readouts
+
+    /// The device name on its own inset ground, so it reads as a value the app is reporting
+    /// rather than as a line of text laid on the card.
     private var input: some View {
-        VStack(alignment: .leading, spacing: DS.Space.snug) {
-            caption("Input")
-            Readout(text: controller.inputDevice?.name ?? "No microphone")
-                .lineLimit(1)
-                .frame(maxWidth: 200, alignment: .leading)
-        }
+        Readout(text: controller.inputDevice?.name ?? "No microphone")
+            .lineLimit(1)
+            .frame(maxWidth: DS.Material.inputChipWidth, alignment: .leading)
+            .padding(.horizontal, DS.Space.base)
+            .padding(.vertical, DS.Space.snug)
+            .background {
+                dsShape(DS.Radius.control)
+                    .fill(DS.Color.well)
+                    .background {
+                        Color.clear.glassEffect(.regular, in: dsShape(DS.Radius.control))
+                    }
+            }
     }
 
-    // No "Level" label over it. The orb is the only thing in the bar that moves, and
-    // labelling it costs the one alignment in the row: a caption plus the orb is
-    // a taller column than any other, which drags every other label off the line.
-    private var orb: some View {
-        // The orb, not a row of bars: it is already the app's picture of your voice
-        // in the HUD, and two different drawings of one signal is one too many.
-        //
-        // Left running while the window is open rather than only while recording —
-        // paused, an `MTKView` shows its last frame, so an idle transport would be a
-        // frozen orb or an empty slot. At rest the level is near zero and the orb is
-        // correspondingly still.
-        OrbView(level: isRecording ? controller.level : 0, isActive: true)
-            .frame(width: orbSize, height: orbSize)
-            .allowsHitTesting(false)
+    private var buttonHeight: CGFloat {
+        isCollapsed ? DS.Material.recordButtonCollapsed : DS.Material.recordButton
     }
 
     private var orbSize: CGFloat {
         isCollapsed ? DS.Material.transportOrbCollapsed : DS.Material.transportOrb
-    }
-
-    private var counter: some View {
-        VStack(alignment: .leading, spacing: DS.Space.snug) {
-            caption("Elapsed")
-            Readout(text: counterText, large: !isCollapsed)
-        }
-    }
-
-    /// A caption over a value, in the expanded card only. At 52pt there is no room for one,
-    /// and a row that never changes shape is legible without them.
-    @ViewBuilder private func caption(_ text: String) -> some View {
-        if !isCollapsed {
-            TextLabel(text: text)
-        }
     }
 
     /// Minutes and seconds, zero-padded.
@@ -312,7 +320,6 @@ private struct TransportPanel: View {
         return String(format: "%02d:%02d", total / 60, total % 60)
     }
 }
-
 
 // MARK: - Transcriptions
 
