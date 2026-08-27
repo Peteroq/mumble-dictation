@@ -26,8 +26,6 @@ struct MainWindow: View {
             AppBackground()
 
             VStack(spacing: DS.Space.roomy) {
-                wordmark
-
                 TransportPanel(controller: controller)
 
                 sectionKeys
@@ -44,25 +42,29 @@ struct MainWindow: View {
             }
             .padding(DS.Space.wide)
             // The title bar is hidden so the glass runs to the top of the window; this is
-            // what keeps the wordmark out from under the traffic lights.
+            // what keeps the transport card out from under the traffic lights.
             .padding(.top, DS.Space.snug)
         }
         .frame(minWidth: 820, minHeight: 600)
+        // Overlaid rather than stacked into the column: the wordmark belongs to the title
+        // strip, not to the content, and a row in the `VStack` would push everything below it
+        // down by its height.
+        .overlay(alignment: .topLeading) { wordmark }
     }
 
-    /// The window's name, drawn in content.
+    /// The window's name, drawn in the strip the hidden title bar left behind.
     ///
     /// `.hiddenTitleBar` is what keeps the glass running to the top of the window, and it
     /// takes the window's title with it — so the app had no name on screen anywhere. This
-    /// puts it back without reintroducing a second surface: it sits below the traffic lights
-    /// on the same plane as everything else, at the top of the same column the panels use.
+    /// puts it back on the traffic lights' own line: the fixed height centres it on them, and
+    /// the inset clears the green one. Quiet and small, because it is chrome.
     private var wordmark: some View {
-        HStack {
-            Text("Mumble")
-                .font(DS.Font.title)
-                .foregroundStyle(DS.Color.ink)
-            Spacer()
-        }
+        Text("Mumble")
+            .font(DS.Font.wordmark)
+            .foregroundStyle(DS.Color.inkSecondary)
+            .frame(height: DS.Material.titlebar)
+            .padding(.leading, DS.Material.titlebarInset)
+            .allowsHitTesting(false)
     }
 
     private var sectionKeys: some View {
