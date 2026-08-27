@@ -173,7 +173,7 @@ Sources/Mumble/
 ├── MumbleApp.swift          @main, AppDelegate, MenuBarExtra
 ├── Core/                    hotkey, capture, dictation state machine, injection
 ├── Transcription/           TranscriptionEngine protocol, Apple + Parakeet
-├── Formatting/              TextFormatter protocol, rules / on-device / Claude, CleanupGuard
+├── Formatting/              TextFormatter protocol, rules / on-device / Claude
 ├── Dictionary/              the store behind MumbleDictionary
 ├── Prompts/                 prompt library model and store
 ├── Orb/                     the Metal orb: renderer, shaders, tuned parameters
@@ -213,6 +213,10 @@ without that and the sphere fills in solid.
 - `Sources/MumbleDictionary/` — the dictionary engine as its own target, because its
   behaviour is a cross-platform contract. `Tests/MumbleDictionaryTests` runs the vectors in
   `shared/dictionary-test-vectors.json`, and the Windows app runs the same file.
+- `Sources/MumbleCleanup/` — the cleanup guard, also its own target. Neither it nor the
+  dictionary may depend on the app: SwiftPM links every test target into one bundle, and a
+  test that reaches the app pulls `FoundationModels` in with it, which fails to load on any
+  machine older than the app's deployment target — CI included.
 - `windows/` — an Avalonia port sharing those vectors. See `windows/README.md`.
 - `bench/` — a standalone benchmark package.
 - `prototypes/orb-lab.html` — the WebGL lab the orb was designed in, with every parameter on
