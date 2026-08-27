@@ -250,7 +250,7 @@ private struct TransportPanel: View {
     var body: some View {
         HStack(spacing: DS.Space.base) {
             recordButton
-            Readout(text: counterText, large: !isCollapsed)
+            clock
             input
             Spacer()
             settingsButton
@@ -349,6 +349,23 @@ private struct TransportPanel: View {
         dsShape(insetRadius).fill(DS.Color.sunken)
     }
 
+    /// The elapsed counter.
+    ///
+    /// Its own view rather than a `Readout`, because it is the one piece of text in the app
+    /// that changes size while you are watching it. `.rounded` at both sizes: `Readout` uses
+    /// a monospaced *design* when small and a rounded one when large, and a typeface cannot
+    /// be animated between — the digits stay tabular either way.
+    private var clock: some View {
+        Text(counterText)
+            .animatableFont(
+                size: isCollapsed ? DS.Font.counterSize : DS.Font.counterLargeSize,
+                weight: .medium,
+                design: .rounded
+            )
+            .monospacedDigit()
+            .foregroundStyle(DS.Color.inkOnDeck)
+    }
+
     /// The way into settings, and back out of it.
     ///
     /// On the card rather than in the tab row because it is chrome, not a place: the three
@@ -356,7 +373,10 @@ private struct TransportPanel: View {
     private var settingsButton: some View {
         Button(action: onSettings) {
             Image(systemName: "gearshape")
-                .font(.system(size: isCollapsed ? 13 : 15, weight: .medium))
+                .animatableFont(
+                    size: isCollapsed ? DS.Material.gearGlyphCollapsed : DS.Material.gearGlyph,
+                    weight: .medium
+                )
                 .foregroundStyle(isShowingSettings ? DS.Color.ink : DS.Color.inkSecondary)
                 .frame(width: buttonHeight, height: buttonHeight)
                 .background {

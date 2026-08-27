@@ -80,6 +80,51 @@ struct Inset<Content: View>: View {
     }
 }
 
+// MARK: - Animatable type
+
+/// A font size that actually animates.
+///
+/// SwiftUI does not interpolate `.font`. It swaps the whole font in one step while the frame
+/// the text sits in animates continuously, so for the length of a transition the glyphs are
+/// one size and their slot is another — and every sibling laid out after them is being pushed
+/// around by a width that jumped when the glyphs did. That is what the transport card's
+/// counter and gear were doing as the card collapsed: snapping to their new size and then
+/// sliding, a beat late, to where that size belongs.
+///
+/// Driving the size through `animatableData` re-renders the text at a new size every frame,
+/// so the glyphs, their slot and everything downstream of them move together.
+///
+/// The design and weight are *not* animatable and must not change across the transition: a
+/// typeface cannot be interpolated at all, and swapping one mid-animation is the same defect
+/// in a less obvious costume.
+struct AnimatableFont: ViewModifier, Animatable {
+    var size: CGFloat
+    var weight: Font.Weight
+    var design: Font.Design
+
+    /// `nonisolated` because `Animatable` is not main-actor bound but `ViewModifier` makes
+    /// this type so, and the conformance has to meet the protocol where it lives. Same shape
+    /// as `Backdrop`'s `==`.
+    nonisolated var animatableData: CGFloat {
+        get { size }
+        set { size = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size, weight: weight, design: design))
+    }
+}
+
+extension View {
+    func animatableFont(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        design: Font.Design = .default
+    ) -> some View {
+        modifier(AnimatableFont(size: size, weight: weight, design: design))
+    }
+}
+
 // MARK: - Labels
 
 /// A small label — a group header, a button title, a metadata chip.
