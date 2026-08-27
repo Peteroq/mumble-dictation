@@ -46,25 +46,9 @@ struct MainWindow: View {
             .padding(.top, DS.Space.snug)
         }
         .frame(minWidth: 820, minHeight: 600)
-        // Overlaid rather than stacked into the column: the wordmark belongs to the title
-        // strip, not to the content, and a row in the `VStack` would push everything below it
-        // down by its height.
-        .overlay(alignment: .topLeading) { wordmark }
-    }
-
-    /// The window's name, drawn in the strip the hidden title bar left behind.
-    ///
-    /// `.hiddenTitleBar` is what keeps the glass running to the top of the window, and it
-    /// takes the window's title with it — so the app had no name on screen anywhere. This
-    /// puts it back on the traffic lights' own line: the fixed height centres it on them, and
-    /// the inset clears the green one. Quiet and small, because it is chrome.
-    private var wordmark: some View {
-        Text("Mumble")
-            .font(DS.Font.wordmark)
-            .foregroundStyle(DS.Color.inkSecondary)
-            .frame(height: DS.Material.titlebar)
-            .padding(.leading, DS.Material.titlebarInset)
-            .allowsHitTesting(false)
+        // Zero-sized: this draws nothing itself, it just gets at the window so the wordmark
+        // can be hung in the title bar.
+        .background { TitlebarWordmark().frame(width: 0, height: 0) }
     }
 
     private var sectionKeys: some View {
@@ -79,6 +63,62 @@ struct MainWindow: View {
                 }
             }
             Spacer()
+        }
+    }
+}
+
+// MARK: - Title bar
+
+/// Hangs the app's name in the title bar, on the traffic lights' own line.
+///
+/// `.hiddenTitleBar` keeps the glass running to the top of the window and takes the window's
+/// title with it, so the app's name appeared nowhere. Drawing it in the view tree can't
+/// replace it: SwiftUI insets content by the title bar's height even when the bar is hidden,
+/// which is why the first attempt landed a clear 30pt below the lights instead of beside them.
+///
+/// An `NSTitlebarAccessoryViewController` is the one thing that lays out *inside* that strip.
+/// `.leading` puts it directly after the traffic lights and centres it on them, so neither the
+/// inset nor the strip's height is a number this file has to guess at.
+private struct TitlebarWordmark: NSViewRepresentable {
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) {}
+
+    /// A zero-sized view that exists only to be told when it has a window. `makeNSView` is
+    /// too early — the view isn't in a hierarchy yet — and `updateNSView` only runs again when
+    /// something upstream changes, which on a cold launch may never happen.
+    final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            TitlebarWordmark.install(in: window)
+        }
+    }
+
+    private static let id = NSUserInterfaceItemIdentifier("MumbleWordmark")
+
+    private static func install(in window: NSWindow?) {
+        guard let window,
+              !window.titlebarAccessoryViewControllers.contains(where: { $0.identifier == id })
+        else { return }
+
+        let host = NSHostingView(rootView: Label())
+        host.layoutSubtreeIfNeeded()
+        host.frame.size = host.fittingSize
+
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.identifier = id
+        accessory.layoutAttribute = .leading
+        accessory.view = host
+        window.addTitlebarAccessoryViewController(accessory)
+    }
+
+    /// Quiet and small, because it is chrome: at full ink and title size it read as a heading
+    /// for the transport card below it.
+    private struct Label: View {
+        var body: some View {
+            Text("Mumble")
+                .font(DS.Font.wordmark)
+                .foregroundStyle(DS.Color.inkSecondary)
+                .padding(.leading, DS.Space.snug)
         }
     }
 }

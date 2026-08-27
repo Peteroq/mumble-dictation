@@ -265,15 +265,6 @@ enum DS {
         /// reads as a shape — what should register is colour, not a blob.
         static let meshBlur: CGFloat = 90
 
-        /// The title bar the window doesn't have.
-        ///
-        /// `.hiddenTitleBar` removes the bar but not the traffic lights, so the top strip of
-        /// the window is still spoken for. `titlebar` is that strip's height — anything drawn
-        /// in it centres on the lights — and `titlebarInset` is where content clears the
-        /// rightmost of them.
-        static let titlebar: CGFloat = 28
-        static let titlebarInset: CGFloat = 88
-
         /// The orb standing in for the level meter, in the transport bar. Its render surface
         /// carries transparent margin for the bloom, so the orb itself draws smaller.
         static let transportOrb: CGFloat = 124
