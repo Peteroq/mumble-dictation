@@ -10,6 +10,11 @@ import simd
 enum OrbParameters {
     // Displacement — identical to the saved tuning apart from a slightly wider noise scale,
     // which keeps the lobes readable when there are far fewer points to describe them.
+    /// The size these values were tuned at, in points. An orb asked to draw smaller than
+    /// this has its dot size scaled down against it — see `OrbRenderer.makeUniforms`. Drawing
+    /// larger needs no correction: everything else here is frame-relative.
+    static let referencePoints: Float = 96
+
     static let noiseScale: Float = 2.0
     static let amplitude: Float = 0.33
     static let flow: Float = 0.28

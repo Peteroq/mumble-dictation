@@ -358,6 +358,14 @@ final class OrbRenderer {
         // the haze parameter means density rather than the brightness of one sprite.
         let hazeAlpha = 0.013 * OrbParameters.haze * (2600 / Float(max(haze.count, 1)))
 
+        // The dot is a point sprite measured in pixels and the lattice is a fixed count of
+        // them, so one `dotSize` covers a far larger share of a small orb than a large one:
+        // at 44pt the sphere fills in solid and reads as a flat white disc rather than a
+        // cloud of points. Scaled against the size the parameters were tuned at — and only
+        // downward, so the HUD's larger orb keeps exactly the look it was tuned to.
+        let sizeScale = min(1, Float(min(width, height))
+                            / (OrbParameters.referencePoints * contentScale))
+
         return Uniforms(
             projection: Self.perspective(fovY: OrbParameters.fieldOfView, aspect: aspect,
                                          near: 0.1, far: 40),
@@ -372,7 +380,7 @@ final class OrbRenderer {
             noiseScale: OrbParameters.noiseScale,
             amplitude: OrbParameters.amplitude,
             flow: OrbParameters.flow,
-            dotSize: OrbParameters.dotSize,
+            dotSize: OrbParameters.dotSize * sizeScale,
             rim: OrbParameters.rimBoost,
             gain: OrbParameters.gain,
             spread: OrbParameters.hueSpread,
