@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 
 /// The two short cues that bracket the microphone handoff: a rising whoosh while a device
@@ -17,12 +18,22 @@ enum Feedback: Hashable {
 
     func play() {
         do {
-            let player = try AVAudioPlayer(data: Self.audio(for: self))
+            // Padded only when it is going somewhere that needs it. See `leadIn`.
+            let padded = self == .ready && Self.outputIsBluetooth
+            let player = try AVAudioPlayer(data: Self.audio(for: self, padded: padded))
             player.volume = volume
             guard player.play() else {
                 Log.audio.error("cue \(String(describing: self), privacy: .public) refused to play")
                 return
             }
+            Log.audio.info(
+                """
+                cue \(String(describing: self), privacy: .public) playing — \
+                \(player.duration, privacy: .public)s at volume \(player.volume, privacy: .public) \
+                on \(Self.outputDevice.name, privacy: .public)\
+                \(padded ? " (padded)" : "", privacy: .public)
+                """
+            )
             Self.retain(player, for: player.duration)
         } catch {
             Log.audio.error("cue \(String(describing: self), privacy: .public) failed: \(error.localizedDescription)")
@@ -32,8 +43,9 @@ enum Feedback: Hashable {
     /// Renders both cues up front. They fire on the path between key-down and the first
     /// word, which is the one stretch of this app where a few milliseconds are visible.
     static func prewarm() {
-        _ = audio(for: .connecting)
-        _ = audio(for: .ready)
+        _ = audio(for: .connecting, padded: false)
+        _ = audio(for: .ready, padded: false)
+        _ = audio(for: .ready, padded: true)
         _ = silence
     }
 
@@ -76,7 +88,28 @@ enum Feedback: Hashable {
     ///
     /// Building the player at the call site costs a fraction of a millisecond. Synthesizing
     /// the waveform is the part worth doing early, and that is what `prewarm` still does.
-    private static var rendered: [Feedback: Data] = [:]
+    private struct Rendering: Hashable {
+        let cue: Feedback
+        let padded: Bool
+    }
+
+    private static var rendered: [Rendering: Data] = [:]
+
+    /// Three hundred milliseconds of dither in front of the chime, for Bluetooth only.
+    ///
+    /// A Bluetooth headset rebuilds its audio link when the profile changes, and asking for
+    /// its microphone is what changes the profile — so our own recording tears the output
+    /// down, roughly a tenth of a second before the chime is due. Whatever is playing while
+    /// that link comes back is lost, and half a second of bell has very little to spare.
+    ///
+    /// Padding moves the loss onto something there is no cost to losing. The cue lands 300ms
+    /// later on a headset, which for "you can talk now" is not a delay anyone will notice,
+    /// and nothing changes at all on a wired or built-in output, because the pad is not added
+    /// there.
+    private static let leadIn: [Float] = {
+        let step = 1 / Float(Int16.max)
+        return (0..<(sampleRate * 3 / 10)).map { $0.isMultiple(of: 2) ? step : -step }
+    }()
 
     /// Two seconds of dither, not of zeroes.
     ///
@@ -92,12 +125,57 @@ enum Feedback: Hashable {
         return wav(samples)
     }()
 
-    private static func audio(for cue: Feedback) -> Data {
-        if let cached = rendered[cue] { return cached }
-        let data = wav(cue.samples)
-        rendered[cue] = data
+    private static func audio(for cue: Feedback, padded: Bool) -> Data {
+        let key = Rendering(cue: cue, padded: padded)
+        if let cached = rendered[key] { return cached }
+        let data = wav(padded ? leadIn + cue.samples : cue.samples)
+        rendered[key] = data
         return data
     }
+
+    // MARK: - Where the sound is going
+
+    /// The current default output, by name and transport.
+    ///
+    /// Logged with every cue, because "it played" and "it played somewhere you could hear it"
+    /// are different claims and only the second one is interesting. It is also how the
+    /// decision to pad gets made.
+    static var outputDevice: (name: String, isBluetooth: Bool) {
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id
+        ) == noErr else { return ("unknown", false) }
+
+        var name: CFString = "" as CFString
+        var nameSize = UInt32(MemoryLayout<CFString>.size)
+        var nameAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let resolved = AudioObjectGetPropertyData(id, &nameAddress, 0, nil, &nameSize, &name) == noErr
+            ? name as String
+            : "unknown"
+
+        var transport = UInt32(0)
+        var transportSize = UInt32(MemoryLayout<UInt32>.size)
+        var transportAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectGetPropertyData(id, &transportAddress, 0, nil, &transportSize, &transport)
+        return (resolved, transport == kAudioDeviceTransportTypeBluetooth
+            || transport == kAudioDeviceTransportTypeBluetoothLE)
+    }
+
+    static var outputIsBluetooth: Bool { outputDevice.isBluetooth }
 
     /// A player released while it is still playing stops mid-note, so each one is held for
     /// as long as it needs and dropped after.
