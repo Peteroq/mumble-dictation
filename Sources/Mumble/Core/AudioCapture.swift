@@ -1,5 +1,20 @@
 import AVFoundation
 import Foundation
+import MumbleObjC
+
+/// Runs an AVFAudio call that is entitled to raise an Objective-C exception.
+///
+/// Every use below is a call that AVFAudio documents as throwing an `NSError` and that in
+/// practice raises instead. Without this the raise unwinds out of whatever async task made
+/// the call and nothing after it runs — see `MumbleObjC.h`.
+private func catchingObjC(_ what: String, _ body: () -> Void) throws {
+    var raised: NSError?
+    guard MumbleRunCatchingException(body, &raised) else {
+        let reason = raised?.localizedDescription ?? "unknown"
+        Log.audio.error("\(what, privacy: .public) raised: \(reason, privacy: .public)")
+        throw TranscriptionError.audioUnavailable(reason)
+    }
+}
 
 /// Microphone capture with on-the-fly conversion to whatever format the speech engine wants.
 ///
@@ -56,7 +71,7 @@ final class AudioCapture: @unchecked Sendable {
         hasDeliveredAudio = false
 
         let device = try bindTap(outputFormat: outputFormat)
-        engine.prepare()
+        try catchingObjC("engine.prepare") { engine.prepare() }
         try engine.start()
         isRunning = true
         observeConfigurationChanges()
@@ -69,8 +84,8 @@ final class AudioCapture: @unchecked Sendable {
             NotificationCenter.default.removeObserver(configObserver)
             self.configObserver = nil
         }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        try? catchingObjC("removeTap") { engine.inputNode.removeTap(onBus: 0) }
+        try? catchingObjC("engine.stop") { engine.stop() }
         isRunning = false
         converter = nil
         converterInput = nil
@@ -99,8 +114,8 @@ final class AudioCapture: @unchecked Sendable {
         let input = engine.inputNode
 
         // Before anything else: on a rebind the old tap is still installed and still bound
-        // to hardware that may have just gone away.
-        input.removeTap(onBus: 0)
+        // to hardware that may have just gone away — which is exactly when this raises.
+        try? catchingObjC("removeTap") { input.removeTap(onBus: 0) }
 
         let device = pin(input) ?? AudioInputDevice.systemDefault
 
@@ -133,8 +148,10 @@ final class AudioCapture: @unchecked Sendable {
         // never expected.
         converter = nil
         converterInput = nil
-        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
-            self?.handle(buffer)
+        try catchingObjC("installTap") {
+            input.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
+                self?.handle(buffer)
+            }
         }
 
         Log.audio.info("""
@@ -188,23 +205,42 @@ final class AudioCapture: @unchecked Sendable {
         }
     }
 
-    private func rebind() {
+    private func rebind(attempt: Int = 0) {
         guard isRunning, let outputFormat else { return }
-        Log.audio.info("audio configuration changed — rebinding input")
-        engine.stop()
+        if attempt == 0 { Log.audio.info("audio configuration changed — rebinding input") }
+        try? catchingObjC("engine.stop") { engine.stop() }
         do {
             try bindTap(outputFormat: outputFormat)
-            engine.prepare()
+            try catchingObjC("engine.prepare") { engine.prepare() }
             try engine.start()
+            if attempt > 0 { Log.audio.info("rebind succeeded on attempt \(attempt + 1)") }
         } catch {
             // Not fatal, and specifically not `isRunning = false`: a Bluetooth device emits
             // several configuration changes back to back while it settles, and the early
-            // ones legitimately fail. Staying "running" is what lets the next notification
-            // rebind successfully; if none ever does, the controller's liveness timeout is
-            // what turns the silence into a message.
-            Log.audio.error("rebind failed: \(error.localizedDescription)")
+            // ones legitimately fail. Staying "running" is what lets a later attempt succeed.
+            Log.audio.error("rebind attempt \(attempt + 1) failed: \(error.localizedDescription)")
+
+            // Retry on our own clock rather than waiting for another notification.
+            //
+            // The engine posts a configuration change per transition, and the *last* one is
+            // the one that has to succeed. Closing an AirPods case ends with a single change
+            // to the built-in mic — if the rebind for that one fails because the route is
+            // still settling, no further notification is coming and the recording captures
+            // nothing for as long as it lasts. Backing off from 150ms covers about five
+            // seconds, which is longer than any handover observed here.
+            guard attempt < Self.rebindAttempts else {
+                Log.audio.error("giving up rebinding after \(attempt + 1) attempts")
+                return
+            }
+            let delay = Self.rebindBackoff * pow(2, Double(attempt))
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.rebind(attempt: attempt + 1)
+            }
         }
     }
+
+    private static let rebindAttempts = 5
+    private static let rebindBackoff: TimeInterval = 0.15
 
     // MARK: - Audio thread
 
