@@ -36,7 +36,15 @@ final class AudioCapture: @unchecked Sendable {
         onLevel: @escaping @Sendable (Float) -> Void,
         onReady: @escaping @Sendable () -> Void = {}
     ) throws -> AudioInputDevice? {
-        guard !isRunning else { return AudioInputDevice.systemDefault }
+        // A start over a capture that is already running is a bug in the caller, and the old
+        // early return made it an invisible one: it kept the previous run's callbacks and its
+        // already-latched `hasDeliveredAudio`, so the new recording never announced itself as
+        // live. No chime, no `.listening`, and five seconds later a liveness error about a
+        // microphone that was working the whole time. Stopping first is both correct and loud.
+        if isRunning {
+            Log.audio.error("capture started while already running — stopping the previous tap first")
+            stop()
+        }
 
         self.preferredDeviceUID = preferredDeviceUID
         self.onBuffer = onBuffer
@@ -66,6 +74,9 @@ final class AudioCapture: @unchecked Sendable {
         onBuffer = nil
         onLevel = nil
         onReady = nil
+        // Belt and braces: `start` clears this too, but leaving a latched flag behind on a
+        // stopped capture is the kind of state that only bites once something else goes wrong.
+        hasDeliveredAudio = false
         Log.audio.info("capture stopped")
     }
 

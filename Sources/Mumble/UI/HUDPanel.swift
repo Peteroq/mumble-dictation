@@ -32,8 +32,19 @@ final class HUDPanel: NSPanel {
         contentView = NSHostingView(rootView: HUDView(controller: controller))
     }
 
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
+    /// Both `nonisolated` on purpose, and it is not a style choice.
+    ///
+    /// The class is `@MainActor`, so these `@objc` overrides would otherwise carry a runtime
+    /// isolation check at their entry. AppKit reads them from inside
+    /// `-[NSApplication _handleActivatedEvent:]`, while it enumerates windows looking for a
+    /// key-window candidate — and that check faults there, in `swift_task_isCurrentExecutor`,
+    /// before a line of this code runs. It is the same fault that used to kill the hotkey tap,
+    /// reached by a different route: every app activation is another roll of the dice, and
+    /// dictating into another app activates constantly.
+    ///
+    /// Safe to leave unisolated because neither touches any state — they are constants.
+    override nonisolated var canBecomeKey: Bool { false }
+    override nonisolated var canBecomeMain: Bool { false }
 
     /// Where the band sits at rest.
     private var restingFrame: NSRect = .zero
