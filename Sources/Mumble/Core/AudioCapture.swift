@@ -21,7 +21,9 @@ private func catchingObjC(_ what: String, _ body: () -> Void) throws {
 /// The tap runs on a real-time audio thread, so everything it touches lives behind
 /// `nonisolated(unsafe)` and is only ever mutated from that one thread.
 final class AudioCapture: @unchecked Sendable {
-    private let engine = AVAudioEngine()
+    /// Replaced for every attempt rather than kept for the life of the app. See
+    /// `replaceEngine`, which is where the reason is.
+    private var engine = AVAudioEngine()
     private nonisolated(unsafe) var converter: AVAudioConverter?
     /// The input format `converter` was built for, so a format change can be noticed.
     private nonisolated(unsafe) var converterInput: AVAudioFormat?
@@ -92,6 +94,7 @@ final class AudioCapture: @unchecked Sendable {
         var lastDevice: AudioInputDevice?
         for attempt in 0..<Self.startDelays.count {
             do {
+                replaceEngine()
                 let device = try bindTap(outputFormat: outputFormat)
                 lastDevice = device ?? lastDevice
                 try catchingObjC("engine.prepare") { engine.prepare() }
@@ -107,8 +110,8 @@ final class AudioCapture: @unchecked Sendable {
                 Log.audio.error(
                     "capture start attempt \(attempt + 1, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"
                 )
-                try? catchingObjC("removeTap") { engine.inputNode.removeTap(onBus: 0) }
-                try? catchingObjC("engine.stop") { engine.stop() }
+                // No teardown here: the next attempt replaces the engine outright, which
+                // is both the teardown and the point.
                 try? await Task.sleep(for: .milliseconds(Self.startDelays[attempt]))
             }
         }
@@ -126,6 +129,28 @@ final class AudioCapture: @unchecked Sendable {
     /// correct the instant the mismatch is reported, and the later ones are for a headset
     /// still negotiating.
     private static let startDelays = [0, 150, 400]
+
+    /// Throws away the engine and builds a new one.
+    ///
+    /// `AVAudioInputNode` caches the format it last resolved, and a long-lived engine goes on
+    /// reporting that format long after the hardware has moved off it. That cache is the
+    /// whole of the AirPods failure: the node insisted its bus was 48kHz across three
+    /// consecutive attempts while CoreAudio was, in the same breath, refusing the tap because
+    /// the hardware was at 24kHz. Re-reading a cached value as often as you like still gives
+    /// you the cached value, which is why retrying alone did not fix it.
+    ///
+    /// A newly built engine asks the device. Measured against these AirPods, a fresh engine
+    /// read the true rate every time, including immediately after an attempt that had just
+    /// failed on the stale one. Building one costs a few milliseconds, once per recording.
+    private func replaceEngine() {
+        try? catchingObjC("removeTap") { engine.inputNode.removeTap(onBus: 0) }
+        try? catchingObjC("engine.stop") { engine.stop() }
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+        }
+        engine = AVAudioEngine()
+    }
 
     /// Whether capture is both meant to be running and actually running.
     ///
@@ -274,11 +299,14 @@ final class AudioCapture: @unchecked Sendable {
     private func rebind(attempt: Int = 0) {
         guard isRunning, let outputFormat else { return }
         if attempt == 0 { Log.audio.info("audio configuration changed — rebinding input") }
-        try? catchingObjC("engine.stop") { engine.stop() }
+        // A rebind is a device change by definition, so the node's cached format is exactly
+        // the thing not to trust here.
+        replaceEngine()
         do {
             try bindTap(outputFormat: outputFormat)
             try catchingObjC("engine.prepare") { engine.prepare() }
             try engine.start()
+            observeConfigurationChanges()
             if attempt > 0 { Log.audio.info("rebind succeeded on attempt \(attempt + 1)") }
         } catch {
             // Not fatal, and specifically not `isRunning = false`: a Bluetooth device emits
