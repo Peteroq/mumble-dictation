@@ -425,6 +425,36 @@ final class HotkeyMonitor {
         return true
     }
 
+    /// Whether the tap exists *and* the system still has it switched on.
+    ///
+    /// Both halves matter and they fail differently. A tap the system disabled for running
+    /// slowly announces itself with `.tapDisabledByTimeout`, which the callback re-arms from.
+    /// A tap that died because the app lost its Accessibility grant announces nothing at all:
+    /// the port is simply never delivered another event, and the key goes quiet for the rest
+    /// of the session with no error anywhere. This is the only way to find out.
+    var isArmed: Bool {
+        guard let tap else { return false }
+        return CGEvent.tapIsEnabled(tap: tap)
+    }
+
+    /// Puts a tap that has gone quiet back to work, rebuilding it if switching it on is not
+    /// enough.
+    ///
+    /// - Returns: whether the tap is armed afterwards.
+    @discardableResult
+    func rearm() -> Bool {
+        if let tap {
+            CGEvent.tapEnable(tap: tap, enable: true)
+            if CGEvent.tapIsEnabled(tap: tap) {
+                Log.hotkey.info("tap had been switched off — re-enabled")
+                return true
+            }
+        }
+        // Enabling did not take, so the port itself is gone. Build a new one.
+        Log.hotkey.error("tap is dead — rebuilding it")
+        return start()
+    }
+
     /// Tells the tap the recording it thinks it is holding open has ended.
     ///
     /// Called from every route out of an active recording, not just the one the tap knows

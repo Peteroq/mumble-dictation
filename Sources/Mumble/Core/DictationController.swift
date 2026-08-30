@@ -187,6 +187,53 @@ final class DictationController {
         return hotkey.start()
     }
 
+    // MARK: - Health, for the supervisor
+
+    /// Whether the push-to-talk tap is alive and switched on.
+    var hotkeyIsArmed: Bool { hotkey.isArmed }
+
+    /// Puts the hotkey back to work. Safe to call when it is already fine.
+    @discardableResult
+    func rearmHotkey() -> Bool { hotkey.rearm() }
+
+    /// Whether capture is actually turning. Only meaningful once a recording is under way,
+    /// which is the supervisor's business to know rather than this property's.
+    var captureIsHealthy: Bool { capture.isHealthy }
+
+    /// Asks capture to rebind after the supervisor has noticed it stopped.
+    func recoverCapture() { capture.recover() }
+
+    /// Tears a recording down and returns to rest, from any state, without finalising.
+    ///
+    /// The blunt instrument, and deliberately so: it is what the supervisor reaches for when
+    /// the controller has sat in one state long enough that no ordinary path is going to move
+    /// it. Nothing here waits on anything — every await in the normal teardown is a place
+    /// this could hang again, and the whole point is that this cannot.
+    func forceReset(reason: String) {
+        Log.app.error("forcing a reset: \(reason, privacy: .public)")
+        cancelConnectionFeedback()
+        hotkey.clearLatch()
+        utteranceFormatter = nil
+        capture.stop()
+        audioContinuation?.finish()
+        audioContinuation = nil
+        feedTask?.cancel()
+        feedTask = nil
+        consumeTask?.cancel()
+        consumeTask = nil
+
+        let engine = self.engine
+        self.engine = nil
+        // Detached and unwaited. A wedged engine is the likeliest reason to be here.
+        Task.detached { await engine?.finish() }
+
+        isHandsFree = false
+        isComparing = false
+        transcript = ""
+        level = 0
+        state = .idle
+    }
+
     func deactivate() {
         inputObserver.stop()
         hotkey.stop()

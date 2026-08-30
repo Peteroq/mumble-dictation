@@ -78,6 +78,23 @@ final class AudioCapture: @unchecked Sendable {
         return device
     }
 
+    /// Whether capture is both meant to be running and actually running.
+    ///
+    /// The two can disagree. `rebind` deliberately leaves `isRunning` true after a failure so
+    /// a later attempt can succeed, which means "we think we are recording" and "the engine
+    /// is turning" are separate facts, and the gap between them is a recording that captures
+    /// nothing.
+    var isHealthy: Bool {
+        isRunning && engine.isRunning
+    }
+
+    /// Asks for a rebind from outside, for a caller that has noticed something is wrong.
+    func recover() {
+        guard isRunning else { return }
+        Log.audio.error("capture is not turning — rebinding")
+        rebind()
+    }
+
     func stop() {
         guard isRunning else { return }
         if let configObserver {

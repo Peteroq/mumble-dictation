@@ -124,6 +124,24 @@ final class HUDPanel: NSPanel {
         }
     }
 
+    /// Forces the panel to match `visible`, whatever `phase` currently believes.
+    ///
+    /// `present` and `dismiss` are both guarded by `phase`, which is what stops a burst of
+    /// state changes replaying the entry animation. That guard is also what makes them
+    /// useless for repair: a panel on screen with `phase` reading `.hidden` cannot be
+    /// dismissed by asking it to dismiss. The supervisor needs a way to say what the answer
+    /// is rather than ask for a transition, so this sets the phase to whichever value lets
+    /// the transition through, then runs it.
+    func setVisible(_ visible: Bool) {
+        if visible {
+            phase = .hidden
+            present()
+        } else {
+            phase = .shown
+            dismiss()
+        }
+    }
+
     func dismiss() {
         guard phase == .entering || phase == .shown else { return }
         phase = .leaving
