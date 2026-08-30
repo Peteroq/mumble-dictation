@@ -45,6 +45,8 @@ enum TranscriptionError: LocalizedError {
     case modelInstallFailed(String)
     case noAudioFormat
     case notRunning
+    /// The audio hardware refused a call, usually because it changed underneath us.
+    case audioUnavailable(String)
 
     var errorDescription: String? {
         switch self {
@@ -56,6 +58,8 @@ enum TranscriptionError: LocalizedError {
             return "No compatible audio format available for the speech engine."
         case .notRunning:
             return "The transcription engine isn't running."
+        case .audioUnavailable(let detail):
+            return "The microphone changed while starting up (\(detail)). Try again."
         }
     }
 }

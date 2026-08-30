@@ -87,6 +87,10 @@ final class DictationController {
     private var livenessTask: Task<Void, Never>?
     /// The outermost guard: a startup that never finishes at all, by any means.
     private var startupTask: Task<Void, Never>?
+    /// Watches for a device that stops delivering *during* a recording.
+    private var stallTask: Task<Void, Never>?
+    /// When the last buffer arrived. Nil before the first one.
+    private var lastAudioAt: Date?
     private let makeEngine: @Sendable () -> any TranscriptionEngine
 
     /// Injected only by tests; production reads the setting per-utterance below.
@@ -415,9 +419,41 @@ final class DictationController {
         default: return
         }
 
+        lastAudioAt = Date()
         state = .listening
+        armStallWatchdog()
         if Settings.shared.soundEnabled { Feedback.ready.play() }
     }
+
+    /// Notices a device that accepted the recording and then went away mid-sentence.
+    ///
+    /// A microphone that is merely in a quiet room still delivers buffers, so silence is not
+    /// what this looks for — an absence of buffers is a device that is gone. Closing an
+    /// AirPods case during a hands-free recording is the case that matters: the engine
+    /// rebinds, the rebind can fail, and without this the recording carries on with the HUD
+    /// up and the meter flat, capturing nothing, until you think to press the key again.
+    ///
+    /// It ends the recording rather than failing it, so whatever was already transcribed is
+    /// cleaned up and inserted as usual. Losing the last few words to a dead headset is very
+    /// different from losing the paragraph before them.
+    private func armStallWatchdog() {
+        stallTask?.cancel()
+        stallTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled, case .listening = state else { return }
+                guard let last = lastAudioAt,
+                      Date().timeIntervalSince(last) > Self.stallTimeout else { continue }
+                Log.audio.error("\(self.inputDevice?.name ?? "the microphone", privacy: .public) stopped delivering — ending the recording")
+                endDictation()
+                return
+            }
+        }
+    }
+
+    /// Four seconds. A handover between devices costs well under one, and the rebind gets
+    /// five tries across about five seconds, so this only fires once that has given up.
+    private static let stallTimeout: TimeInterval = 4
 
     /// Stops both timers. Every path out of a recording goes through this, or the liveness
     /// timer fires an error over a run that already finished.
@@ -428,6 +464,9 @@ final class DictationController {
         livenessTask = nil
         startupTask?.cancel()
         startupTask = nil
+        stallTask?.cancel()
+        stallTask = nil
+        lastAudioAt = nil
     }
 
     private func endDictation() {
@@ -699,6 +738,7 @@ final class DictationController {
     /// near the middle of its range the whole time you are talking, which is exactly what made
     /// the orb look like it was idling rather than listening.
     private func updateLevel(_ new: Float) {
+        lastAudioAt = Date()
         level += (new - level) * (new > level ? 0.62 : 0.16)
     }
 
