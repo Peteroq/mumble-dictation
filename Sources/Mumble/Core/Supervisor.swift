@@ -16,6 +16,62 @@ import Foundation
 /// deliberately dull: no state of its own beyond how long the current condition has held,
 /// nothing that can itself get stuck, and every repair idempotent so that running it against
 /// a healthy app does nothing at all.
+/// Shared across the two threads, so it carries its own lock.
+private final class Heartbeat: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = Date()
+    private var reported = false
+
+    func stamp() {
+        lock.lock(); last = Date(); reported = false; lock.unlock()
+    }
+
+    /// - Returns: how long the main actor has been unresponsive, but only the first time it
+    ///   crosses the line — a wedged app should say so once, not twice a second.
+    func stallToReport(threshold: TimeInterval) -> TimeInterval? {
+        lock.lock(); defer { lock.unlock() }
+        let age = Date().timeIntervalSince(last)
+        guard age > threshold, !reported else { return nil }
+        reported = true
+        return age
+    }
+}
+
+/// The timer's handler, at file scope on purpose.
+///
+/// Written as a closure inside `Supervisor` it inherits that type's `@MainActor` isolation,
+/// and Swift emits a runtime isolation check at the closure's entry. That check is not a
+/// warning: running on the supervisor's own queue, as this must, it trips
+/// `dispatch_assert_queue` and traps the process — which is exactly what it did, and exactly
+/// the fault that used to kill the hotkey tap, reached by a different route.
+///
+/// At file scope the function is nonisolated and no check is emitted. It is also the only
+/// honest place for it: the whole purpose of this handler is to run somewhere the main actor
+/// cannot stop it, so it must not be isolated to the main actor.
+/// Builds the handler here, rather than writing the closure at the call site.
+///
+/// This distinction is the entire fix and it is not obvious. A closure *literal* written
+/// inside a `@MainActor` type inherits that isolation — it does not matter that its body only
+/// calls nonisolated code, because the check is emitted at the closure's own entry, before
+/// the body runs. Moving the work to a nonisolated function and still writing
+/// `{ thatFunction() }` inside the actor therefore changes nothing, which is precisely the
+/// mistake that had to be made once to be believed: the crash was identical afterwards, same
+/// `closure #2 in Supervisor.start()`.
+///
+/// The literal has to be born out here.
+private func makeStallHandler(_ beat: Heartbeat, threshold: TimeInterval) -> @Sendable () -> Void {
+    { reportMainActorStall(beat, threshold: threshold) }
+}
+
+private func reportMainActorStall(_ beat: Heartbeat, threshold: TimeInterval) {
+    guard let stalled = beat.stallToReport(threshold: threshold) else { return }
+    // Deliberately only a report. Anything this could *do* about it would have to run on the
+    // actor that is stuck, and the entire point of being over here is not to depend on that.
+    Log.app.error(
+        "the main actor has not run for \(Int(stalled), privacy: .public)s — the app is wedged"
+    )
+}
+
 @MainActor
 final class Supervisor {
     private let controller: DictationController
@@ -48,6 +104,8 @@ final class Supervisor {
     // fault did not run at all.
 
     private static let interval: Duration = .seconds(2)
+    /// The same cadence, in the units `DispatchSourceTimer` speaks.
+    private static let intervalSeconds: TimeInterval = 2
     /// A cold Parakeet load is ~20s, and the controller's own startup watchdog is 30s.
     private static let startingLimit: TimeInterval = 45
     /// `endDictation` bounds its own awaits to 9s, and then a smart cleanup pass can add
@@ -57,21 +115,53 @@ final class Supervisor {
     /// The controller clears its own errors after 3s.
     private static let errorLimit: TimeInterval = 15
 
+    /// The heartbeat the main actor writes, and the timer that reads it.
+    ///
+    /// The checks below all have to run on the main actor, because everything they inspect
+    /// lives there. That was fine until a blocked main actor turned out to be one of the
+    /// failure modes — an `AVAudioEngine` teardown deadlocked inside its own lock, and every
+    /// watchdog in this app went down with it, because a task that cannot be scheduled cannot
+    /// notice that nothing is being scheduled. The rescuers all shared a thread with the
+    /// thing they were rescuing.
+    ///
+    /// So there are two halves. A main-actor task runs the checks and stamps `heartbeat` each
+    /// time. A `DispatchSourceTimer` on a queue of its own reads that stamp and cares about
+    /// one thing: whether it is advancing. If the main actor is wedged, the timer still fires,
+    /// notices the stamp is stale, and says so — which is the difference between a hang the
+    /// user has to diagnose by force-quitting and one the log names.
+    private let pulse = DispatchQueue(label: "ai.pivotstudio.mumble.supervisor")
+    private var timer: DispatchSourceTimer?
+    private let beat = Heartbeat()
+
+    /// Long enough that a slow frame or a busy model load is not mistaken for a hang.
+    private static let stallThreshold: TimeInterval = 8
+
     func start() {
         guard task == nil else { return }
+        beat.stamp()
         task = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.interval)
                 guard !Task.isCancelled, let self else { return }
+                beat.stamp()
                 check()
             }
         }
+
+        let timer = DispatchSource.makeTimerSource(queue: pulse)
+        timer.schedule(deadline: .now() + Self.intervalSeconds, repeating: Self.intervalSeconds)
+        timer.setEventHandler(handler: makeStallHandler(beat, threshold: Self.stallThreshold))
+        timer.resume()
+        self.timer = timer
+
         Log.app.info("supervisor watching")
     }
 
     func stop() {
         task?.cancel()
         task = nil
+        timer?.cancel()
+        timer = nil
     }
 
     // MARK: - The check
