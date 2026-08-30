@@ -220,6 +220,9 @@ final class DictationController {
         guard case .idle = state else { return }
         state = .starting
         isHandsFree = false
+        // Before anything else that takes time. See `wakeOutput` — the output route has to be
+        // open before the chime is played, not opened by it.
+        if Settings.shared.soundEnabled { Feedback.wakeOutput() }
         transcript = ""
         holdStarted = Date()
         isComparing = Settings.shared.compareMode
