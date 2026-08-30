@@ -8,6 +8,8 @@ import Foundation
 final class AudioCapture: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private nonisolated(unsafe) var converter: AVAudioConverter?
+    /// The input format `converter` was built for, so a format change can be noticed.
+    private nonisolated(unsafe) var converterInput: AVAudioFormat?
     private nonisolated(unsafe) var outputFormat: AVAudioFormat?
     private var isRunning = false
 
@@ -71,6 +73,7 @@ final class AudioCapture: @unchecked Sendable {
         engine.stop()
         isRunning = false
         converter = nil
+        converterInput = nil
         onBuffer = nil
         onLevel = nil
         onReady = nil
@@ -109,17 +112,34 @@ final class AudioCapture: @unchecked Sendable {
             throw TranscriptionError.noAudioFormat
         }
 
-        converter = nativeFormat == outputFormat
-            ? nil
-            : AVAudioConverter(from: nativeFormat, to: outputFormat)
-
-        input.installTap(onBus: 0, bufferSize: 2048, format: nativeFormat) { [weak self] buffer, _ in
+        // `nil`, not `nativeFormat`, and this is a wedged-app fix rather than a tidy-up.
+        //
+        // Passing a format we read on the line above is a race against the hardware, and
+        // Bluetooth loses it: the headset can change profile in the microseconds between the
+        // read and the install, and 24kHz hands-free becomes 48kHz. `installTap` answers a
+        // format that does not match the bus by throwing an **Objective-C exception** —
+        //
+        //     Format mismatch: input hw <1 ch, 48000 Hz>, client format <1 ch, 24000 Hz>
+        //
+        // — which `try` cannot catch, because it is an NSException and not a Swift error. It
+        // unwound straight out of the async task that starts a recording, so the controller
+        // was left pinned at `.starting` with the HUD up, the hotkey inert, and no way back
+        // short of force-quitting the app.
+        //
+        // `nil` means "whatever this bus is carrying", resolved inside `installTap` where
+        // there is no window to lose. The converter then has to be built from the format the
+        // buffers actually arrive in, which is `handle`'s job, and which also means a format
+        // that changes mid-recording is now something this survives rather than something it
+        // never expected.
+        converter = nil
+        converterInput = nil
+        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
             self?.handle(buffer)
         }
 
         Log.audio.info("""
             capture on \(device?.name ?? "system default", privacy: .public) — \
-            native \(nativeFormat.sampleRate)Hz → engine \(outputFormat.sampleRate)Hz
+            node reports \(nativeFormat.sampleRate)Hz, engine wants \(outputFormat.sampleRate)Hz
             """)
         return device
     }
@@ -201,6 +221,20 @@ final class AudioCapture: @unchecked Sendable {
         onLevel?(Self.rms(of: buffer))
 
         guard let outputFormat else { return }
+
+        // Built here, from the format the buffer genuinely arrived in, rather than from one
+        // read before the tap was installed. See `bindTap` for why that read is not to be
+        // trusted. Rebuilt if the format ever changes under us, which on a Bluetooth device
+        // is a thing that happens.
+        if converterInput != buffer.format {
+            converterInput = buffer.format
+            converter = buffer.format == outputFormat
+                ? nil
+                : AVAudioConverter(from: buffer.format, to: outputFormat)
+            Log.audio.info(
+                "capturing \(buffer.format.sampleRate)Hz → \(outputFormat.sampleRate)Hz"
+            )
+        }
 
         // AVAudioEngine reuses the tap's buffer as soon as this returns, so the engine
         // must never see it directly — copy when no conversion would otherwise allocate.
