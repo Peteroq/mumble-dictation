@@ -340,7 +340,7 @@ final class DictationController {
                 // uncatchable exception and left the app with no way back.
                 self.armLiveness()
 
-                let device = try capture.start(
+                let device = try await capture.start(
                     outputFormat: format,
                     preferredDeviceUID: Settings.shared.inputDeviceUID,
                     onBuffer: { chunk in
@@ -793,7 +793,7 @@ final class DictationController {
         cancelConnectionFeedback()
         hotkey.clearLatch()
         utteranceFormatter = nil
-        Log.app.error("\(message)")
+        Log.app.error("\(message, privacy: .public)")
         capture.stop()
         audioContinuation?.finish()
         audioContinuation = nil
