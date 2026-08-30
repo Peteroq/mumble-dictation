@@ -34,6 +34,31 @@ enum Feedback: Hashable {
     static func prewarm() {
         _ = audio(for: .connecting)
         _ = audio(for: .ready)
+        _ = silence
+    }
+
+    /// Opens the output route at key-down, so the ready chime is not the thing that has to
+    /// open it.
+    ///
+    /// A Bluetooth headset tears its audio link down when nothing is playing, and the first
+    /// sound after that silence loses its opening while the link comes back — a few hundred
+    /// milliseconds, which is most of a chime that only lasts half a second. It is why the
+    /// chime was missing on the first recording and audible on the second: the second one
+    /// arrived while the link was still warm from the first.
+    ///
+    /// Two seconds of near-silence, started when the key goes down, covers the whole
+    /// spin-up: the connecting whoosh at 180ms, and the chime whenever the microphone
+    /// actually goes live. Inaudible, and on a wired or built-in output it costs nothing but
+    /// a stream nobody hears.
+    static func wakeOutput() {
+        do {
+            let player = try AVAudioPlayer(data: silence)
+            player.volume = 1
+            guard player.play() else { return }
+            retain(player, for: player.duration)
+        } catch {
+            Log.audio.error("could not wake the output: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Players
@@ -52,6 +77,20 @@ enum Feedback: Hashable {
     /// Building the player at the call site costs a fraction of a millisecond. Synthesizing
     /// the waveform is the part worth doing early, and that is what `prewarm` still does.
     private static var rendered: [Feedback: Data] = [:]
+
+    /// Two seconds of dither, not of zeroes.
+    ///
+    /// One least-significant bit, alternating. Inaudible at any volume — it is 90dB below a
+    /// speaking voice — but it is genuinely a signal, which matters: a stream of exact zeroes
+    /// is something a driver or a codec is entitled to notice and skip, and a link that was
+    /// never opened is not a link that was woken.
+    private static let silence: Data = {
+        let count = sampleRate * 2
+        var samples = [Float](repeating: 0, count: count)
+        let step = 1 / Float(Int16.max)
+        for index in 0..<count { samples[index] = index.isMultiple(of: 2) ? step : -step }
+        return wav(samples)
+    }()
 
     private static func audio(for cue: Feedback) -> Data {
         if let cached = rendered[cue] { return cached }
