@@ -15,6 +15,9 @@ actor AppleSpeechEngine: TranscriptionEngine {
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var resultsTask: Task<Void, Never>?
 
+    /// Held so a torn-down session can close the stream itself. See `finish()`.
+    private var chunkContinuation: AsyncThrowingStream<TranscriptionChunk, Error>.Continuation?
+
     /// Text the engine has committed. Volatile results are appended on top for display
     /// but discarded as soon as a final result covering the same range arrives.
     private var finalizedText = ""
@@ -68,6 +71,7 @@ actor AppleSpeechEngine: TranscriptionEngine {
         hasFedAudio = false
 
         let (chunks, chunkContinuation) = AsyncThrowingStream<TranscriptionChunk, Error>.makeStream()
+        self.chunkContinuation = chunkContinuation
 
         // Drain the transcriber's results into our simpler chunk stream.
         resultsTask = Task { [weak self] in
@@ -107,6 +111,7 @@ actor AppleSpeechEngine: TranscriptionEngine {
             } catch {
                 Log.speech.error("finalize failed: \(error.localizedDescription)")
                 await analyzer?.cancelAndFinishNow()
+                closeResults()
             }
         } else {
             // `finalizeAndFinishThroughEndOfInput` waits for the analyzer to work through
@@ -115,11 +120,28 @@ actor AppleSpeechEngine: TranscriptionEngine {
             // session with no audio has nothing to finalize, so tear it down directly.
             Log.speech.info("no audio reached the analyzer — cancelling instead of finalizing")
             await analyzer?.cancelAndFinishNow()
+            closeResults()
         }
 
         analyzer = nil
         transcriber = nil
         resultsTask = nil
+        chunkContinuation = nil
+    }
+
+    /// Ends the chunk stream by hand, for the two paths that cancel the analyzer.
+    ///
+    /// `finalizeAndFinishThroughEndOfInput` closes `transcriber.results` on its way out, so
+    /// the drain in `start` reaches the end of its loop and finishes the stream itself. A
+    /// *cancelled* analyzer does not: there is nothing left to emit and nothing to say so
+    /// either, and the drain sits on a sequence that will never produce another element.
+    ///
+    /// Downstream that was three seconds of the controller waiting on a stream that could
+    /// not close, logged as "transcript drain timed out" and felt as a hotkey that ignored
+    /// the next press. Every recording too short to deliver a buffer paid it.
+    private func closeResults() {
+        resultsTask?.cancel()
+        chunkContinuation?.finish()
     }
 
     // MARK: - Result accumulation

@@ -169,7 +169,12 @@ final class DictationController {
         // Only claims hands-free if there is actually a recording to hold open: a double tap
         // that began on a failed start would otherwise leave the flag set with nothing live.
         hotkey.onLatch = { [weak self] in
-            guard let self, state.isActive else { return }
+            guard let self else { return }
+            // The tap latches on timing alone and cannot know whether a recording is running.
+            // If none is — a double tap landing while the previous utterance is still being
+            // cleaned up is the common case — the latch has to be taken back, or the tap
+            // spends the next press stopping something that was never started.
+            guard state.isActive else { return hotkey.clearLatch() }
             isHandsFree = true
         }
         hotkey.onUnlatch = { [weak self] in self?.endDictation() }
@@ -386,6 +391,7 @@ final class DictationController {
         // inside `finish()`, and smart cleanup adds up to 4s on top.
         guard state.isActive, state != .finishing else { return }
         cancelConnectionFeedback()
+        hotkey.clearLatch()
         isHandsFree = false
         state = .finishing
         capture.stop()
@@ -446,6 +452,7 @@ final class DictationController {
 
     private func cancelDictation() {
         cancelConnectionFeedback()
+        hotkey.clearLatch()
         utteranceFormatter = nil
         capture.stop()
         audioContinuation?.finish()
@@ -466,6 +473,7 @@ final class DictationController {
 
     private func teardown() async {
         cancelConnectionFeedback()
+        hotkey.clearLatch()
         utteranceFormatter = nil
         capture.stop()
         audioContinuation?.finish()
@@ -650,6 +658,7 @@ final class DictationController {
 
     private func fail(_ message: String) {
         cancelConnectionFeedback()
+        hotkey.clearLatch()
         utteranceFormatter = nil
         Log.app.error("\(message)")
         capture.stop()

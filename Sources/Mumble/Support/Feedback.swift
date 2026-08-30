@@ -16,35 +16,60 @@ enum Feedback: Hashable {
     case ready
 
     func play() {
-        guard let player = Self.player(for: self) else { return }
-        // Re-arming the head matters: hold, release, hold again inside half a second is
-        // normal use, and a player left at the end of its buffer plays nothing.
-        player.currentTime = 0
-        player.play()
+        do {
+            let player = try AVAudioPlayer(data: Self.audio(for: self))
+            player.volume = volume
+            guard player.play() else {
+                Log.audio.error("cue \(String(describing: self), privacy: .public) refused to play")
+                return
+            }
+            Self.retain(player, for: player.duration)
+        } catch {
+            Log.audio.error("cue \(String(describing: self), privacy: .public) failed: \(error.localizedDescription)")
+        }
     }
 
     /// Renders both cues up front. They fire on the path between key-down and the first
     /// word, which is the one stretch of this app where a few milliseconds are visible.
     static func prewarm() {
-        _ = player(for: .connecting)
-        _ = player(for: .ready)
+        _ = audio(for: .connecting)
+        _ = audio(for: .ready)
     }
 
     // MARK: - Players
 
-    private static var cache: [Feedback: AVAudioPlayer] = [:]
+    /// The *rendered bytes* are cached. A prepared player is not, and that distinction is the
+    /// whole bug this replaced.
+    ///
+    /// A single `AVAudioPlayer`, built and `prepareToPlay`'d at launch, binds itself to the
+    /// output device as it was configured at that moment. The ready chime is then played at
+    /// the exact instant our own capture has forced the output to reconfigure: asking AirPods
+    /// for their microphone drags them off A2DP and onto the hands-free profile, which is a
+    /// different sample rate on a different stream. The player survives that as an object and
+    /// reports success, and produces no sound at all — which is precisely what "the ding
+    /// stopped happening" was.
+    ///
+    /// Building the player at the call site costs a fraction of a millisecond. Synthesizing
+    /// the waveform is the part worth doing early, and that is what `prewarm` still does.
+    private static var rendered: [Feedback: Data] = [:]
 
-    private static func player(for cue: Feedback) -> AVAudioPlayer? {
-        if let cached = cache[cue] { return cached }
-        do {
-            let player = try AVAudioPlayer(data: wav(cue.samples))
-            player.volume = cue.volume
-            player.prepareToPlay()
-            cache[cue] = player
-            return player
-        } catch {
-            Log.audio.error("cue \(String(describing: cue), privacy: .public) failed: \(error.localizedDescription)")
-            return nil
+    private static func audio(for cue: Feedback) -> Data {
+        if let cached = rendered[cue] { return cached }
+        let data = wav(cue.samples)
+        rendered[cue] = data
+        return data
+    }
+
+    /// A player released while it is still playing stops mid-note, so each one is held for
+    /// as long as it needs and dropped after.
+    private static var live: [ObjectIdentifier: AVAudioPlayer] = [:]
+
+    private static func retain(_ player: AVAudioPlayer, for duration: TimeInterval) {
+        let id = ObjectIdentifier(player)
+        live[id] = player
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(duration + 0.2))
+            live[id] = nil
         }
     }
 
