@@ -24,6 +24,20 @@ final class AudioCapture: @unchecked Sendable {
     /// Replaced for every attempt rather than kept for the life of the app. See
     /// `replaceEngine`, which is where the reason is.
     private var engine = AVAudioEngine()
+
+    /// Every engine control operation runs here, and never on the caller's thread.
+    ///
+    /// Tearing down an `AVAudioEngine` bound to a Bluetooth device can block indefinitely
+    /// inside the engine's own lock — sampled mid-recording, every sample sat in
+    /// `-[AVAudioEngine inputNode]` on a `std::recursive_mutex` that was never released.
+    ///
+    /// Doing that on the main actor is worse than the fault it was trying to fix. Every
+    /// safeguard in this app — the liveness timer, the startup watchdog, the stall watchdog,
+    /// the supervisor — is a task on the main actor, so blocking it does not merely freeze
+    /// the window: it switches off the machinery whose entire job is to notice that a
+    /// recording has stopped making progress. The app then wedges with nothing left running
+    /// that could rescue it, which is exactly the state all of that was built to prevent.
+    private let control = DispatchQueue(label: "ai.pivotstudio.mumble.capture-control")
     private nonisolated(unsafe) var converter: AVAudioConverter?
     /// The input format `converter` was built for, so a format change can be noticed.
     private nonisolated(unsafe) var converterInput: AVAudioFormat?
@@ -55,6 +69,30 @@ final class AudioCapture: @unchecked Sendable {
         onLevel: @escaping @Sendable (Float) -> Void,
         onReady: @escaping @Sendable () -> Void = {}
     ) async throws -> AudioInputDevice? {
+        try await withCheckedThrowingContinuation { continuation in
+            control.async {
+                do {
+                    continuation.resume(returning: try self.startOnControlQueue(
+                        outputFormat: outputFormat,
+                        preferredDeviceUID: preferredDeviceUID,
+                        onBuffer: onBuffer,
+                        onLevel: onLevel,
+                        onReady: onReady
+                    ))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func startOnControlQueue(
+        outputFormat: AVAudioFormat,
+        preferredDeviceUID: String?,
+        onBuffer: @escaping @Sendable (AudioChunk) -> Void,
+        onLevel: @escaping @Sendable (Float) -> Void,
+        onReady: @escaping @Sendable () -> Void
+    ) throws -> AudioInputDevice? {
         // A start over a capture that is already running is a bug in the caller, and the old
         // early return made it an invisible one: it kept the previous run's callbacks and its
         // already-latched `hasDeliveredAudio`, so the new recording never announced itself as
@@ -112,7 +150,9 @@ final class AudioCapture: @unchecked Sendable {
                 )
                 // No teardown here: the next attempt replaces the engine outright, which
                 // is both the teardown and the point.
-                try? await Task.sleep(for: .milliseconds(Self.startDelays[attempt]))
+                if Self.startDelays[attempt] > 0 {
+                    Thread.sleep(forTimeInterval: Double(Self.startDelays[attempt]) / 1000)
+                }
             }
         }
 
@@ -143,13 +183,20 @@ final class AudioCapture: @unchecked Sendable {
     /// read the true rate every time, including immediately after an attempt that had just
     /// failed on the stale one. Building one costs a few milliseconds, once per recording.
     private func replaceEngine() {
-        try? catchingObjC("removeTap") { engine.inputNode.removeTap(onBus: 0) }
-        try? catchingObjC("engine.stop") { engine.stop() }
+        let retiring = engine
         if let configObserver {
             NotificationCenter.default.removeObserver(configObserver)
             self.configObserver = nil
         }
         engine = AVAudioEngine()
+
+        // The old one is let go of, not waited on. Stopping an engine whose Bluetooth device
+        // is mid-renegotiation can block for as long as it likes, and the new engine does not
+        // need it to have finished — see `control` for what that block used to cost.
+        DispatchQueue.global(qos: .utility).async {
+            try? catchingObjC("removeTap") { retiring.inputNode.removeTap(onBus: 0) }
+            try? catchingObjC("engine.stop") { retiring.stop() }
+        }
     }
 
     /// Whether capture is both meant to be running and actually running.
@@ -166,7 +213,7 @@ final class AudioCapture: @unchecked Sendable {
     func recover() {
         guard isRunning else { return }
         Log.audio.error("capture is not turning — rebinding")
-        rebind()
+        control.async { [weak self] in self?.rebind() }
     }
 
     func stop() {
@@ -175,8 +222,14 @@ final class AudioCapture: @unchecked Sendable {
             NotificationCenter.default.removeObserver(configObserver)
             self.configObserver = nil
         }
-        try? catchingObjC("removeTap") { engine.inputNode.removeTap(onBus: 0) }
-        try? catchingObjC("engine.stop") { engine.stop() }
+        // Bookkeeping first and synchronously, so a caller that stops and immediately starts
+        // again sees a stopped capture. The teardown itself goes to the control queue,
+        // because it is the half that can block.
+        let retiring = engine
+        control.async {
+            try? catchingObjC("removeTap") { retiring.inputNode.removeTap(onBus: 0) }
+            try? catchingObjC("engine.stop") { retiring.stop() }
+        }
         isRunning = false
         converter = nil
         converterInput = nil
@@ -292,7 +345,10 @@ final class AudioCapture: @unchecked Sendable {
             object: engine,
             queue: .main
         ) { [weak self] _ in
-            self?.rebind()
+            // Hopped off the main queue immediately: a rebind rebuilds the engine, and that
+            // is the work which must never run where the watchdogs live.
+            guard let self else { return }
+            control.async { self.rebind() }
         }
     }
 
@@ -327,7 +383,7 @@ final class AudioCapture: @unchecked Sendable {
                 return
             }
             let delay = Self.rebindBackoff * pow(2, Double(attempt))
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            control.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.rebind(attempt: attempt + 1)
             }
         }
