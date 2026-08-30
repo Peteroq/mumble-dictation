@@ -85,6 +85,8 @@ final class DictationController {
     private var connectingTask: Task<Void, Never>?
     /// Gives up on a device that accepted `start` and then delivered nothing.
     private var livenessTask: Task<Void, Never>?
+    /// The outermost guard: a startup that never finishes at all, by any means.
+    private var startupTask: Task<Void, Never>?
     private let makeEngine: @Sendable () -> any TranscriptionEngine
 
     /// Injected only by tests; production reads the setting per-utterance below.
@@ -220,6 +222,8 @@ final class DictationController {
         guard case .idle = state else { return }
         state = .starting
         isHandsFree = false
+        // Before the first thing that can fail, which is everything below.
+        armStartupWatchdog()
         // Before anything else that takes time. See `wakeOutput` — the output route has to be
         // open before the chime is played, not opened by it.
         if Settings.shared.soundEnabled { Feedback.wakeOutput() }
@@ -281,6 +285,10 @@ final class DictationController {
                     return recording
                 }
 
+                // Before the call, not after it: this is the line that raised an
+                // uncatchable exception and left the app with no way back.
+                self.armLiveness()
+
                 let device = try capture.start(
                     outputFormat: format,
                     preferredDeviceUID: Settings.shared.inputDeviceUID,
@@ -329,6 +337,37 @@ final class DictationController {
     /// The built-in mic delivers its first buffer within a buffer period, so on that path
     /// this task is cancelled before it ever speaks and the user hears the ready chime
     /// alone. The whoosh only exists to cover a wait long enough to notice.
+    /// The last resort, armed before anything that can fail and cancelled by every route
+    /// out of a recording.
+    ///
+    /// A start can be torn out from under us by something `try` cannot catch: `installTap`
+    /// answers a format that no longer matches its bus by raising an Objective-C exception,
+    /// which unwinds straight out of this task. Nothing runs after it — no `catch`, no
+    /// `fail`, no state change — so the controller sat at `.starting` forever with the HUD
+    /// up and the hotkey inert, and the only way out was to quit the app.
+    ///
+    /// Generous, because it has to clear a cold Parakeet model load, which is twenty seconds
+    /// of legitimate work before a single sample is expected. It is not there to be prompt.
+    /// It is there so that "wedged forever" is not a state this app has.
+    private func armStartupWatchdog() {
+        startupTask?.cancel()
+        startupTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
+            switch state {
+            case .starting, .connecting:
+                fail("Recording didn't start. Try again, and pick a different input in Settings ▸ Microphone if it keeps happening.")
+            default:
+                break
+            }
+        }
+    }
+
+    /// Five seconds without a sample. Armed *before* `capture.start`, not after, so a start
+    /// that never returns is covered by it too.
+    private func armLiveness() {
+    }
+
     private func armConnectionFeedback() {
         connectingTask?.cancel()
         connectingTask = Task { @MainActor in
@@ -367,6 +406,8 @@ final class DictationController {
         connectingTask = nil
         livenessTask?.cancel()
         livenessTask = nil
+        startupTask?.cancel()
+        startupTask = nil
 
         // The user may have released, or the run may have failed, during the handshake.
         switch state {
@@ -385,6 +426,8 @@ final class DictationController {
         connectingTask = nil
         livenessTask?.cancel()
         livenessTask = nil
+        startupTask?.cancel()
+        startupTask = nil
     }
 
     private func endDictation() {
