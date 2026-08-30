@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CoreAudio
 import Foundation
@@ -16,28 +17,37 @@ enum Feedback: Hashable {
     /// Two-partial bell. Means "the mic is live, talk now".
     case ready
 
+    /// Played through `NSSound`, not `AVAudioPlayer`, and that is not arbitrary.
+    ///
+    /// `AVAudioPlayer` was the original choice and it is the wrong one here. It binds itself
+    /// to the output as configured when it was prepared, survives a route change as an
+    /// object, reports success from `play()`, and produces no sound — which is what "the
+    /// chime stopped happening" was for a week. Apple documents the same lying-success for
+    /// audio scheduled on an `AVAudioEngine` across a configuration change: completion
+    /// handlers fire as though it played.
+    ///
+    /// `NSSound` is the path the end-of-dictation Pop and Glass already use, and those were
+    /// never the ones that went missing.
     func play() {
-        do {
-            // Padded only when it is going somewhere that needs it. See `leadIn`.
-            let padded = self == .ready && Self.outputIsBluetooth
-            let player = try AVAudioPlayer(data: Self.audio(for: self, padded: padded))
-            player.volume = volume
-            guard player.play() else {
-                Log.audio.error("cue \(String(describing: self), privacy: .public) refused to play")
-                return
-            }
-            Log.audio.info(
-                """
-                cue \(String(describing: self), privacy: .public) playing — \
-                \(player.duration, privacy: .public)s at volume \(player.volume, privacy: .public) \
-                on \(Self.outputDevice.name, privacy: .public)\
-                \(padded ? " (padded)" : "", privacy: .public)
-                """
-            )
-            Self.retain(player, for: player.duration)
-        } catch {
-            Log.audio.error("cue \(String(describing: self), privacy: .public) failed: \(error.localizedDescription)")
+        let padded = self == .ready && Self.outputIsBluetooth
+        guard let sound = NSSound(data: Self.audio(for: self, padded: padded)) else {
+            Log.audio.error("cue \(String(describing: self), privacy: .public) could not be built")
+            return
         }
+        sound.volume = volume
+        guard sound.play() else {
+            Log.audio.error("cue \(String(describing: self), privacy: .public) refused to play")
+            return
+        }
+        Log.audio.info(
+            """
+            cue \(String(describing: self), privacy: .public) playing — \
+            \(sound.duration, privacy: .public)s at volume \(volume, privacy: .public) \
+            on \(Self.outputDevice.name, privacy: .public)\
+            \(padded ? " (padded)" : "", privacy: .public)
+            """
+        )
+        Self.retain(sound, for: sound.duration)
     }
 
     /// Renders both cues up front. They fire on the path between key-down and the first
@@ -63,53 +73,11 @@ enum Feedback: Hashable {
     /// actually goes live. Inaudible, and on a wired or built-in output it costs nothing but
     /// a stream nobody hears.
     static func wakeOutput() {
-        do {
-            let player = try AVAudioPlayer(data: silence)
-            player.volume = 1
-            guard player.play() else { return }
-            retain(player, for: player.duration)
-        } catch {
-            Log.audio.error("could not wake the output: \(error.localizedDescription)")
-        }
+        guard let sound = NSSound(data: silence) else { return }
+        sound.volume = 1
+        guard sound.play() else { return }
+        retain(sound, for: sound.duration)
     }
-
-    // MARK: - Players
-
-    /// The *rendered bytes* are cached. A prepared player is not, and that distinction is the
-    /// whole bug this replaced.
-    ///
-    /// A single `AVAudioPlayer`, built and `prepareToPlay`'d at launch, binds itself to the
-    /// output device as it was configured at that moment. The ready chime is then played at
-    /// the exact instant our own capture has forced the output to reconfigure: asking AirPods
-    /// for their microphone drags them off A2DP and onto the hands-free profile, which is a
-    /// different sample rate on a different stream. The player survives that as an object and
-    /// reports success, and produces no sound at all — which is precisely what "the ding
-    /// stopped happening" was.
-    ///
-    /// Building the player at the call site costs a fraction of a millisecond. Synthesizing
-    /// the waveform is the part worth doing early, and that is what `prewarm` still does.
-    private struct Rendering: Hashable {
-        let cue: Feedback
-        let padded: Bool
-    }
-
-    private static var rendered: [Rendering: Data] = [:]
-
-    /// Three hundred milliseconds of dither in front of the chime, for Bluetooth only.
-    ///
-    /// A Bluetooth headset rebuilds its audio link when the profile changes, and asking for
-    /// its microphone is what changes the profile — so our own recording tears the output
-    /// down, roughly a tenth of a second before the chime is due. Whatever is playing while
-    /// that link comes back is lost, and half a second of bell has very little to spare.
-    ///
-    /// Padding moves the loss onto something there is no cost to losing. The cue lands 300ms
-    /// later on a headset, which for "you can talk now" is not a delay anyone will notice,
-    /// and nothing changes at all on a wired or built-in output, because the pad is not added
-    /// there.
-    private static let leadIn: [Float] = {
-        let step = 1 / Float(Int16.max)
-        return (0..<(sampleRate * 3 / 10)).map { $0.isMultiple(of: 2) ? step : -step }
-    }()
 
     /// Two seconds of dither, not of zeroes.
     ///
@@ -123,6 +91,26 @@ enum Feedback: Hashable {
         let step = 1 / Float(Int16.max)
         for index in 0..<count { samples[index] = index.isMultiple(of: 2) ? step : -step }
         return wav(samples)
+    }()
+
+    private struct Rendering: Hashable {
+        let cue: Feedback
+        let padded: Bool
+    }
+
+    /// The rendered bytes are cached; a prepared player is not. Synthesising the waveform is
+    /// the part worth doing early, and building the sound at the call site is what keeps it
+    /// from binding to an output route that has since changed.
+    private static var rendered: [Rendering: Data] = [:]
+
+    /// Three hundred milliseconds of dither in front of the chime, for Bluetooth only.
+    ///
+    /// A Bluetooth headset rebuilds its audio link when the profile changes, and asking for
+    /// its microphone is what changes the profile. Padding moves the loss onto something
+    /// there is no cost to losing. Nothing is added on a wired or built-in output.
+    private static let leadIn: [Float] = {
+        let step = 1 / Float(Int16.max)
+        return (0..<(sampleRate * 3 / 10)).map { $0.isMultiple(of: 2) ? step : -step }
     }()
 
     private static func audio(for cue: Feedback, padded: Bool) -> Data {
@@ -179,9 +167,9 @@ enum Feedback: Hashable {
 
     /// A player released while it is still playing stops mid-note, so each one is held for
     /// as long as it needs and dropped after.
-    private static var live: [ObjectIdentifier: AVAudioPlayer] = [:]
+    private static var live: [ObjectIdentifier: NSSound] = [:]
 
-    private static func retain(_ player: AVAudioPlayer, for duration: TimeInterval) {
+    private static func retain(_ player: NSSound, for duration: TimeInterval) {
         let id = ObjectIdentifier(player)
         live[id] = player
         Task { @MainActor in

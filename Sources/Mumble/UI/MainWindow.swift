@@ -407,7 +407,15 @@ private struct TransportPanel: View {
             Picker(selection: inputSelection) {
                 Text("System default").tag(String?.none)
                 ForEach(AudioInputDevice.all) { device in
-                    Text(device.name).tag(String?.some(device.uid))
+                    // Bluetooth is marked, not hidden and not blocked.
+                    //
+                    // A headset has to change profile before its microphone works, and that
+                    // costs around half a second here — long enough that the first word can
+                    // land before the device does. Every other dictation app that documents
+                    // its behaviour marks the same trade and lets you take it anyway, which
+                    // is the right call: it is your microphone.
+                    Text(device.isBluetooth ? "\(device.name) — slow to wake" : device.name)
+                        .tag(String?.some(device.uid))
                 }
             } label: {
                 EmptyView()

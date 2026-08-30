@@ -277,7 +277,21 @@ final class DictationController {
         armStartupWatchdog()
         // Before anything else that takes time. See `wakeOutput` — the output route has to be
         // open before the chime is played, not opened by it.
-        if Settings.shared.soundEnabled { Feedback.wakeOutput() }
+        // The chime means "the hotkey fired", and it is played here — before anything has
+        // touched the microphone — for a reason that took a long time to establish.
+        //
+        // It used to mean "the microphone delivered its first sample", which on a Bluetooth
+        // headset is the single worst instant to make a sound: asking for that microphone is
+        // what moves the headset onto its hands-free profile, and the profile change rebuilds
+        // the output link about a tenth of a second before the cue was due. The chime was
+        // played into a route that was being torn down by this app's own recording, and it
+        // was inaudible for a week.
+        //
+        // At key-down nothing of ours is touching the route yet. It is also the more honest
+        // signal: what the user needs to know is that the key registered. Whether the
+        // microphone is live yet is what the HUD says, and on a slow device the connecting
+        // cue says it too.
+        if Settings.shared.soundEnabled { Feedback.ready.play() }
         transcript = ""
         holdStarted = Date()
         isComparing = Settings.shared.compareMode
@@ -422,12 +436,15 @@ final class DictationController {
     private func armConnectionFeedback() {
         connectingTask?.cancel()
         connectingTask = Task { @MainActor in
-            // 180ms, not 100. A 2048-frame buffer at 48kHz is already ~43ms, and the
-            // built-in mic occasionally takes a couple of those to get going — firing under
-            // that would put a whoosh in front of every recording, which is exactly the
-            // noise this is supposed to avoid. AirPods take several hundred milliseconds,
-            // so the gap between the two cases is wide enough to be safe at this threshold.
-            try? await Task.sleep(for: .milliseconds(180))
+            // 700ms, raised from 180.
+            //
+            // At 180 this fired only on genuinely slow devices, because the chime it followed
+            // was itself played at first-buffer. Now that the chime is at key-down, 180ms
+            // would put a whoosh behind it on every Bluetooth recording — the AirPods
+            // handover measured here is around 560ms, so that threshold no longer separates
+            // "slow" from "normal", it just describes Bluetooth. This one still means what it
+            // always meant: long enough that the wait is worth remarking on.
+            try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled, case .starting = state else { return }
             state = .connecting
             if Settings.shared.soundEnabled { Feedback.connecting.play() }
@@ -469,7 +486,6 @@ final class DictationController {
         lastAudioAt = Date()
         state = .listening
         armStallWatchdog()
-        if Settings.shared.soundEnabled { Feedback.ready.play() }
     }
 
     /// Notices a device that accepted the recording and then went away mid-sentence.
