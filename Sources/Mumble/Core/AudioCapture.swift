@@ -52,7 +52,7 @@ final class AudioCapture: @unchecked Sendable {
         onBuffer: @escaping @Sendable (AudioChunk) -> Void,
         onLevel: @escaping @Sendable (Float) -> Void,
         onReady: @escaping @Sendable () -> Void = {}
-    ) throws -> AudioInputDevice? {
+    ) async throws -> AudioInputDevice? {
         // A start over a capture that is already running is a bug in the caller, and the old
         // early return made it an invisible one: it kept the previous run's callbacks and its
         // already-latched `hasDeliveredAudio`, so the new recording never announced itself as
@@ -70,13 +70,62 @@ final class AudioCapture: @unchecked Sendable {
         self.outputFormat = outputFormat
         hasDeliveredAudio = false
 
-        let device = try bindTap(outputFormat: outputFormat)
-        try catchingObjC("engine.prepare") { engine.prepare() }
-        try engine.start()
-        isRunning = true
-        observeConfigurationChanges()
-        return device
+        // Retried, because the first attempt on a Bluetooth microphone is expected to fail.
+        //
+        // A tap has to be installed against the format the bus is carrying, and `installTap`
+        // resolves that at the moment it is called — `nil` means "read it now", not "read it
+        // later". But asking AirPods for their microphone is what moves them onto the
+        // hands-free profile, and that happens inside `engine.start()`, one line further
+        // down. So the tap is pinned to the 48kHz the device was serving as a speaker, the
+        // hardware becomes a 24kHz headset underneath it, and the graph refuses to
+        // initialize:
+        //
+        //     Error, formats don't match! Input HW format: 24000 Hz, tap format: 48000 Hz
+        //     AVAudioEngine could not initialize, error = -10868
+        //
+        // There is no ordering that avoids this, because the switch is caused by the very
+        // call that has to come after the tap. What there is, is a second attempt: by the
+        // time the first one fails the device has already become what it was going to be, so
+        // re-reading the format and installing again converges. The delays cover a headset
+        // that takes its time about the handover.
+        var lastError: Error?
+        var lastDevice: AudioInputDevice?
+        for attempt in 0..<Self.startDelays.count {
+            do {
+                let device = try bindTap(outputFormat: outputFormat)
+                lastDevice = device ?? lastDevice
+                try catchingObjC("engine.prepare") { engine.prepare() }
+                try engine.start()
+                isRunning = true
+                observeConfigurationChanges()
+                if attempt > 0 {
+                    Log.audio.info("capture started on attempt \(attempt + 1, privacy: .public)")
+                }
+                return device
+            } catch {
+                lastError = error
+                Log.audio.error(
+                    "capture start attempt \(attempt + 1, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"
+                )
+                try? catchingObjC("removeTap") { engine.inputNode.removeTap(onBus: 0) }
+                try? catchingObjC("engine.stop") { engine.stop() }
+                try? await Task.sleep(for: .milliseconds(Self.startDelays[attempt]))
+            }
+        }
+
+        let name = lastDevice?.name
+            ?? AudioInputDevice.systemDefault?.name
+            ?? "The microphone"
+        Log.audio.error(
+            "capture would not start on \(name, privacy: .public) after \(Self.startDelays.count, privacy: .public) attempts: \(lastError?.localizedDescription ?? "unknown", privacy: .public)"
+        )
+        throw TranscriptionError.microphoneUnavailable(name)
     }
+
+    /// How long to wait before each retry. The first is immediate: the format is already
+    /// correct the instant the mismatch is reported, and the later ones are for a headset
+    /// still negotiating.
+    private static let startDelays = [0, 150, 400]
 
     /// Whether capture is both meant to be running and actually running.
     ///

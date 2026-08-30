@@ -47,6 +47,8 @@ enum TranscriptionError: LocalizedError {
     case notRunning
     /// The audio hardware refused a call, usually because it changed underneath us.
     case audioUnavailable(String)
+    /// Capture could not be started on a named device, after retrying.
+    case microphoneUnavailable(String)
 
     var errorDescription: String? {
         switch self {
@@ -60,6 +62,11 @@ enum TranscriptionError: LocalizedError {
             return "The transcription engine isn't running."
         case .audioUnavailable(let detail):
             return "The microphone changed while starting up (\(detail)). Try again."
+        case .microphoneUnavailable(let name):
+            // Deliberately not the underlying error. AVFAudio's is
+            // "com.apple.coreaudio.avfaudio error -10868", which tells the user nothing they
+            // can act on; the real one is in the log for whoever wants it.
+            return "\(name) didn't start. A Bluetooth headset can need a moment after connecting — try again."
         }
     }
 }
