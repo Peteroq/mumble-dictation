@@ -254,6 +254,10 @@ without that and the sphere fills in solid.
 - `bench/` — a standalone benchmark package.
 - `prototypes/orb-lab.html` — the WebGL lab the orb was designed in, with every parameter on
   a slider. The Metal renderer is a port of it.
+- `prototypes/cat-lab.html` — the same lab for the optional cat: a silhouette keyed out of
+  artwork, given thickness, and lit at its outline. Drop a PNG on the stage to re-key it. It
+  shares the orb lab's noise, post chain and framing presets, so a value tuned in one means
+  the same thing in the other.
 - `docs/PARAKEET-WINDOWS.md` — model acquisition notes.
 
 ## Requirements
