@@ -29,6 +29,11 @@ final class HUDPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = false
 
+        // Explicit, not inherited. `NSApp.appearance` covers this today, but the band is the
+        // one surface a user sees over someone else's app, and it being a different colour on
+        // a different Mac is exactly the drift this pins down.
+        appearance = NSAppearance(named: .darkAqua)
+
         contentView = NSHostingView(rootView: HUDView(controller: controller))
     }
 
