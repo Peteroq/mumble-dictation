@@ -150,6 +150,39 @@ signature.
 
 ---
 
+## Working on more than one machine
+
+Each machine gets its own clone. There is nothing to configure beyond the first install —
+`make install` builds, signs and replaces `/Applications/Mumble.app` in place, so updating
+is:
+
+```bash
+git pull
+make install
+```
+
+`make doctor` first if something looks off; it names the toolchain and the signing identity
+it found.
+
+Two things do **not** travel with the repo, by design:
+
+- **Permissions.** Accessibility and Microphone are granted per machine, in System
+  Settings. A second machine asks once, on the first recording.
+- **Your data.** Prompts, the dictionary and the run history live in
+  `~/Library/Application Support/Mumble/`, and your settings live in this app's
+  `UserDefaults`. Neither syncs. To carry the prompt library and dictionary across, copy
+  `prompts.json` and `dictionary.txt` from that folder — they are both plain text, and the
+  app reads whatever it finds at launch.
+
+Signing is the one thing worth checking on a new machine. `make install` prefers a
+Developer ID certificate, falls back to an Apple Development one, and falls back again to a
+self-signed identity you can create with `make signing`. Any of the three is fine; what
+matters is that it is *not* ad-hoc, because macOS keys the Accessibility and Microphone
+grants to the signature and an ad-hoc one changes on every build — which means re-granting
+both permissions after every `make install`.
+
+---
+
 ## How it fits together
 
 ```
