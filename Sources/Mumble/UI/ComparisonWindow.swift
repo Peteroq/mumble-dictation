@@ -103,7 +103,7 @@ struct ComparisonWindow: View {
                     .padding(.vertical, 8)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(isRecording ? .red : .accentColor)
+                .tint(isRecording ? .red : DS.Color.accent)
                 .controlSize(.large)
             }
 
@@ -240,8 +240,8 @@ private struct EngineRow: View {
                 Text(run.engine + (isWinner ? " · fastest" : ""))
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 8).padding(.vertical, 2)
-                    .background((isWinner ? Color.green : Color.accentColor).opacity(0.16), in: Capsule())
-                    .foregroundStyle(isWinner ? .green : Color.accentColor)
+                    .background((isWinner ? Color.green : DS.Color.accent).opacity(0.16), in: Capsule())
+                    .foregroundStyle(isWinner ? .green : DS.Color.accent)
                 Spacer()
                 Text("\(run.processSeconds, format: .number.precision(.fractionLength(2)))s")
                     .font(.system(size: isWinner ? 20 : 17, weight: .semibold, design: .rounded))
