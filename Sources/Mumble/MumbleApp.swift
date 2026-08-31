@@ -14,6 +14,7 @@ struct MumbleApp: App {
                 // this the system paints an opaque window background first and the backdrop
                 // blur has nothing behind it to blur.
                 .containerBackground(Color.clear, for: .window)
+                .preferredColorScheme(.dark)
         }
         .defaultSize(width: 860, height: 620)
         .windowResizability(.contentMinSize)
@@ -45,12 +46,14 @@ struct MumbleApp: App {
         // Secondary now: status and the hotkey while you're working in another app.
         MenuBarExtra {
             MenuContent(controller: delegate.controller)
+                .preferredColorScheme(.dark)
         } label: {
             Image(systemName: delegate.controller.state.isActive ? "waveform.circle.fill" : "waveform")
         }
 
         Window("Engine comparison", id: "comparison") {
             ComparisonWindow(controller: delegate.controller)
+                .preferredColorScheme(.dark)
         }
         .defaultSize(width: 640, height: 560)
         .windowResizability(.contentMinSize)
@@ -69,6 +72,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // non-activating panel, so dictating into another app never steals its focus — that
         // property belongs to the panel, not to the activation policy.
         NSApp.setActivationPolicy(.regular)
+
+        // Pinned dark, on every machine, deliberately.
+        //
+        // The tokens in `DS.Color` each carry a light and a dark value and resolve against
+        // whatever `NSAppearance` is current, which means the app looked like a different
+        // product on a Mac set to Light — the same build, pulled from the same commit,
+        // rendering a bright glass instead of the near-black one it is designed as. The orb's
+        // palette is a violet-to-pink ramp lifted from its own shader constants, and it was
+        // chosen against a dark ground; the light face was always the weaker of the two.
+        //
+        // Set on `NSApp` rather than per window so it reaches everything AppKit resolves for
+        // us — the HUD panel, the menu bar extra, materials, and the dynamic `NSColor`
+        // providers behind `DS.Color.face`. The SwiftUI side is pinned alongside it with
+        // `.preferredColorScheme(.dark)`, because SwiftUI resolves its own semantic colors
+        // rather than asking AppKit.
+        NSApp.appearance = NSAppearance(named: .darkAqua)
 
         hud = HUDPanel(controller: controller)
 
@@ -112,6 +131,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         supervisor.start()
         self.supervisor = supervisor
 
+        // Recorded because this is the thing that used to differ between machines, and a
+        // screenshot from the other Mac is a slow way to find out which face it drew.
+        Log.app.info(
+            """
+            appearance pinned to \(NSApp.effectiveAppearance.name.rawValue, privacy: .public) \
+            (system is \(UserDefaults.standard.string(forKey: "AppleInterfaceStyle") ?? "Light", privacy: .public))
+            """
+        )
         Log.app.info("Mumble ready — hold \(Settings.shared.pushToTalkKey.displayName) to dictate")
     }
 
