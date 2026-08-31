@@ -85,6 +85,12 @@ final class DictationController {
     private var connectingTask: Task<Void, Never>?
     /// Gives up on a device that accepted `start` and then delivered nothing.
     private var livenessTask: Task<Void, Never>?
+    /// The outermost guard: a startup that never finishes at all, by any means.
+    private var startupTask: Task<Void, Never>?
+    /// Watches for a device that stops delivering *during* a recording.
+    private var stallTask: Task<Void, Never>?
+    /// When the last buffer arrived. Nil before the first one.
+    private var lastAudioAt: Date?
     private let makeEngine: @Sendable () -> any TranscriptionEngine
 
     /// Injected only by tests; production reads the setting per-utterance below.
@@ -169,11 +175,63 @@ final class DictationController {
         // Only claims hands-free if there is actually a recording to hold open: a double tap
         // that began on a failed start would otherwise leave the flag set with nothing live.
         hotkey.onLatch = { [weak self] in
-            guard let self, state.isActive else { return }
+            guard let self else { return }
+            // The tap latches on timing alone and cannot know whether a recording is running.
+            // If none is — a double tap landing while the previous utterance is still being
+            // cleaned up is the common case — the latch has to be taken back, or the tap
+            // spends the next press stopping something that was never started.
+            guard state.isActive else { return hotkey.clearLatch() }
             isHandsFree = true
         }
         hotkey.onUnlatch = { [weak self] in self?.endDictation() }
         return hotkey.start()
+    }
+
+    // MARK: - Health, for the supervisor
+
+    /// Whether the push-to-talk tap is alive and switched on.
+    var hotkeyIsArmed: Bool { hotkey.isArmed }
+
+    /// Puts the hotkey back to work. Safe to call when it is already fine.
+    @discardableResult
+    func rearmHotkey() -> Bool { hotkey.rearm() }
+
+    /// Whether capture is actually turning. Only meaningful once a recording is under way,
+    /// which is the supervisor's business to know rather than this property's.
+    var captureIsHealthy: Bool { capture.isHealthy }
+
+    /// Asks capture to rebind after the supervisor has noticed it stopped.
+    func recoverCapture() { capture.recover() }
+
+    /// Tears a recording down and returns to rest, from any state, without finalising.
+    ///
+    /// The blunt instrument, and deliberately so: it is what the supervisor reaches for when
+    /// the controller has sat in one state long enough that no ordinary path is going to move
+    /// it. Nothing here waits on anything — every await in the normal teardown is a place
+    /// this could hang again, and the whole point is that this cannot.
+    func forceReset(reason: String) {
+        Log.app.error("forcing a reset: \(reason, privacy: .public)")
+        cancelConnectionFeedback()
+        hotkey.clearLatch()
+        utteranceFormatter = nil
+        capture.stop()
+        audioContinuation?.finish()
+        audioContinuation = nil
+        feedTask?.cancel()
+        feedTask = nil
+        consumeTask?.cancel()
+        consumeTask = nil
+
+        let engine = self.engine
+        self.engine = nil
+        // Detached and unwaited. A wedged engine is the likeliest reason to be here.
+        Task.detached { await engine?.finish() }
+
+        isHandsFree = false
+        isComparing = false
+        transcript = ""
+        level = 0
+        state = .idle
     }
 
     func deactivate() {
@@ -215,6 +273,25 @@ final class DictationController {
         guard case .idle = state else { return }
         state = .starting
         isHandsFree = false
+        // Before the first thing that can fail, which is everything below.
+        armStartupWatchdog()
+        // Before anything else that takes time. See `wakeOutput` — the output route has to be
+        // open before the chime is played, not opened by it.
+        // The chime means "the hotkey fired", and it is played here — before anything has
+        // touched the microphone — for a reason that took a long time to establish.
+        //
+        // It used to mean "the microphone delivered its first sample", which on a Bluetooth
+        // headset is the single worst instant to make a sound: asking for that microphone is
+        // what moves the headset onto its hands-free profile, and the profile change rebuilds
+        // the output link about a tenth of a second before the cue was due. The chime was
+        // played into a route that was being torn down by this app's own recording, and it
+        // was inaudible for a week.
+        //
+        // At key-down nothing of ours is touching the route yet. It is also the more honest
+        // signal: what the user needs to know is that the key registered. Whether the
+        // microphone is live yet is what the HUD says, and on a slow device the connecting
+        // cue says it too.
+        if Settings.shared.soundEnabled { Feedback.ready.play() }
         transcript = ""
         holdStarted = Date()
         isComparing = Settings.shared.compareMode
@@ -273,7 +350,11 @@ final class DictationController {
                     return recording
                 }
 
-                let device = try capture.start(
+                // Before the call, not after it: this is the line that raised an
+                // uncatchable exception and left the app with no way back.
+                self.armLiveness()
+
+                let device = try await capture.start(
                     outputFormat: format,
                     preferredDeviceUID: Settings.shared.inputDeviceUID,
                     onBuffer: { chunk in
@@ -321,15 +402,49 @@ final class DictationController {
     /// The built-in mic delivers its first buffer within a buffer period, so on that path
     /// this task is cancelled before it ever speaks and the user hears the ready chime
     /// alone. The whoosh only exists to cover a wait long enough to notice.
+    /// The last resort, armed before anything that can fail and cancelled by every route
+    /// out of a recording.
+    ///
+    /// A start can be torn out from under us by something `try` cannot catch: `installTap`
+    /// answers a format that no longer matches its bus by raising an Objective-C exception,
+    /// which unwinds straight out of this task. Nothing runs after it — no `catch`, no
+    /// `fail`, no state change — so the controller sat at `.starting` forever with the HUD
+    /// up and the hotkey inert, and the only way out was to quit the app.
+    ///
+    /// Generous, because it has to clear a cold Parakeet model load, which is twenty seconds
+    /// of legitimate work before a single sample is expected. It is not there to be prompt.
+    /// It is there so that "wedged forever" is not a state this app has.
+    private func armStartupWatchdog() {
+        startupTask?.cancel()
+        startupTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
+            switch state {
+            case .starting, .connecting:
+                fail("Recording didn't start. Try again, and pick a different input in Settings ▸ Microphone if it keeps happening.")
+            default:
+                break
+            }
+        }
+    }
+
+    /// Five seconds without a sample. Armed *before* `capture.start`, not after, so a start
+    /// that never returns is covered by it too.
+    private func armLiveness() {
+    }
+
     private func armConnectionFeedback() {
         connectingTask?.cancel()
         connectingTask = Task { @MainActor in
-            // 180ms, not 100. A 2048-frame buffer at 48kHz is already ~43ms, and the
-            // built-in mic occasionally takes a couple of those to get going — firing under
-            // that would put a whoosh in front of every recording, which is exactly the
-            // noise this is supposed to avoid. AirPods take several hundred milliseconds,
-            // so the gap between the two cases is wide enough to be safe at this threshold.
-            try? await Task.sleep(for: .milliseconds(180))
+            // 700ms, raised from 180.
+            //
+            // At 180 this fired only on genuinely slow devices, because the chime it followed
+            // was itself played at first-buffer. Now that the chime is at key-down, 180ms
+            // would put a whoosh behind it on every Bluetooth recording — the AirPods
+            // handover measured here is around 560ms, so that threshold no longer separates
+            // "slow" from "normal", it just describes Bluetooth. This one still means what it
+            // always meant: long enough that the wait is worth remarking on.
+            try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled, case .starting = state else { return }
             state = .connecting
             if Settings.shared.soundEnabled { Feedback.connecting.play() }
@@ -359,6 +474,8 @@ final class DictationController {
         connectingTask = nil
         livenessTask?.cancel()
         livenessTask = nil
+        startupTask?.cancel()
+        startupTask = nil
 
         // The user may have released, or the run may have failed, during the handshake.
         switch state {
@@ -366,9 +483,40 @@ final class DictationController {
         default: return
         }
 
+        lastAudioAt = Date()
         state = .listening
-        if Settings.shared.soundEnabled { Feedback.ready.play() }
+        armStallWatchdog()
     }
+
+    /// Notices a device that accepted the recording and then went away mid-sentence.
+    ///
+    /// A microphone that is merely in a quiet room still delivers buffers, so silence is not
+    /// what this looks for — an absence of buffers is a device that is gone. Closing an
+    /// AirPods case during a hands-free recording is the case that matters: the engine
+    /// rebinds, the rebind can fail, and without this the recording carries on with the HUD
+    /// up and the meter flat, capturing nothing, until you think to press the key again.
+    ///
+    /// It ends the recording rather than failing it, so whatever was already transcribed is
+    /// cleaned up and inserted as usual. Losing the last few words to a dead headset is very
+    /// different from losing the paragraph before them.
+    private func armStallWatchdog() {
+        stallTask?.cancel()
+        stallTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled, case .listening = state else { return }
+                guard let last = lastAudioAt,
+                      Date().timeIntervalSince(last) > Self.stallTimeout else { continue }
+                Log.audio.error("\(self.inputDevice?.name ?? "the microphone", privacy: .public) stopped delivering — ending the recording")
+                endDictation()
+                return
+            }
+        }
+    }
+
+    /// Four seconds. A handover between devices costs well under one, and the rebind gets
+    /// five tries across about five seconds, so this only fires once that has given up.
+    private static let stallTimeout: TimeInterval = 4
 
     /// Stops both timers. Every path out of a recording goes through this, or the liveness
     /// timer fires an error over a run that already finished.
@@ -377,6 +525,11 @@ final class DictationController {
         connectingTask = nil
         livenessTask?.cancel()
         livenessTask = nil
+        startupTask?.cancel()
+        startupTask = nil
+        stallTask?.cancel()
+        stallTask = nil
+        lastAudioAt = nil
     }
 
     private func endDictation() {
@@ -386,6 +539,7 @@ final class DictationController {
         // inside `finish()`, and smart cleanup adds up to 4s on top.
         guard state.isActive, state != .finishing else { return }
         cancelConnectionFeedback()
+        hotkey.clearLatch()
         isHandsFree = false
         state = .finishing
         capture.stop()
@@ -446,6 +600,7 @@ final class DictationController {
 
     private func cancelDictation() {
         cancelConnectionFeedback()
+        hotkey.clearLatch()
         utteranceFormatter = nil
         capture.stop()
         audioContinuation?.finish()
@@ -466,6 +621,7 @@ final class DictationController {
 
     private func teardown() async {
         cancelConnectionFeedback()
+        hotkey.clearLatch()
         utteranceFormatter = nil
         capture.stop()
         audioContinuation?.finish()
@@ -645,13 +801,15 @@ final class DictationController {
     /// near the middle of its range the whole time you are talking, which is exactly what made
     /// the orb look like it was idling rather than listening.
     private func updateLevel(_ new: Float) {
+        lastAudioAt = Date()
         level += (new - level) * (new > level ? 0.62 : 0.16)
     }
 
     private func fail(_ message: String) {
         cancelConnectionFeedback()
+        hotkey.clearLatch()
         utteranceFormatter = nil
-        Log.app.error("\(message)")
+        Log.app.error("\(message, privacy: .public)")
         capture.stop()
         audioContinuation?.finish()
         audioContinuation = nil

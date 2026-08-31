@@ -113,11 +113,53 @@ private final class TapState: @unchecked Sendable {
     }
 
     /// Re-arms a tap the system switched off for running too slowly or being interrupted.
+    ///
+    /// The events that happened while it was off are gone, so the state machine is now
+    /// describing a keyboard that no longer exists. Left alone that is a dead hotkey: if the
+    /// key was down when the tap went away, `isPressed` stays `true` and the guard in
+    /// `handle` throws away the next genuine press as a duplicate — forever, because the
+    /// release that would have cleared it was one of the events we missed.
+    ///
+    /// So the state is wound back to rest, and if a hold was in progress its release is
+    /// synthesized. Ending a recording the user is still holding is the safe direction to be
+    /// wrong in; the other way leaves the microphone open with no way to close it.
     func reEnable() {
         lock.lock()
         let port = port
+        let wasPressed = isPressed
+        let wasLatched = isLatched
+        pendingRelease?.cancel()
+        pendingRelease = nil
+        isPressed = false
+        isLatched = false
+        pressedAt = nil
+        ignoresNextRelease = false
         lock.unlock()
+
         if let port { CGEvent.tapEnable(tap: port, enable: true) }
+        if wasLatched {
+            emit(.unlatch)
+        } else if wasPressed {
+            emit(.release)
+        }
+    }
+
+    /// Drops the latch without emitting anything.
+    ///
+    /// The tap decides to latch on its own — it has to, the decision is made from the timing
+    /// of two key events and nothing else. But whether a recording is actually *running* is
+    /// the controller's business, and the two used to be able to disagree: double-tap while
+    /// the previous utterance is still being cleaned up and the controller declines to go
+    /// hands-free while the tap latches anyway. From then on the tap reads the next press as
+    /// "stop", the controller has nothing to stop, and the key looks broken until it is
+    /// pressed a second time.
+    ///
+    /// This is the controller's way of saying so.
+    func clearLatch() {
+        lock.lock()
+        defer { lock.unlock() }
+        isLatched = false
+        ignoresNextRelease = false
     }
 
     func configure(key: PushToTalkKey) {
@@ -175,6 +217,10 @@ private final class TapState: @unchecked Sendable {
     // Both of these run with the lock already held.
 
     private func press() -> [HotkeyGesture] {
+        // Only ever applies to the release of the press that set it. Carrying it further
+        // would swallow the end of some later hold and leave the mic open.
+        ignoresNextRelease = false
+
         if isLatched {
             // A tap while hands-free means stop, and the release that follows it is not a
             // release of anything: what it would have ended is already ending.
@@ -258,6 +304,50 @@ private func hotkeyTapCallback(
     return consume ? nil : Unmanaged.passUnretained(event)
 }
 
+/// A run loop of our own, on a thread of our own, for the tap to be serviced on.
+///
+/// The tap used to be added to `CFRunLoopGetCurrent()` from `start()` — which runs on the
+/// main actor, so the tap was serviced by the main run loop. The system disables a tap whose
+/// callback it cannot deliver promptly, and the main thread of this app is busy for seconds
+/// at a time: the cleanup model, SwiftUI laying out a long transcript, a window animating.
+/// Every one of those was a chance for the hotkey to be switched off underneath us.
+///
+/// The callback does almost nothing — takes a lock, updates five fields, hands a gesture to
+/// the main queue — so a dedicated thread sits idle except for the microseconds it is
+/// actually needed, and is never behind anything.
+private final class TapThread: @unchecked Sendable {
+    private var runLoop: CFRunLoop?
+    private let started = DispatchSemaphore(value: 0)
+
+    /// Blocks until the thread's run loop exists and the source is on it. That wait is
+    /// bounded by a thread start, and returning before the tap is live would mean the first
+    /// key press after launch quietly did nothing.
+    init(source: CFRunLoopSource) {
+        nonisolated(unsafe) let source = source
+        let thread = Thread { [self] in
+            runLoop = CFRunLoopGetCurrent()
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            started.signal()
+            // A run loop with no input sources returns immediately, which is why the source
+            // goes on first.
+            CFRunLoopRun()
+        }
+        thread.name = "ai.pivotstudio.mumble.hotkey"
+        // Above default, below real-time. The tap is on the path of every modifier press on
+        // the machine, and a late callback is a disabled tap.
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        started.wait()
+    }
+
+    func stop(source: CFRunLoopSource) {
+        guard let runLoop else { return }
+        CFRunLoopRemoveSource(runLoop, source, .commonModes)
+        CFRunLoopStop(runLoop)
+        self.runLoop = nil
+    }
+}
+
 /// Watches for a held modifier key using a `CGEventTap`.
 ///
 /// A tap is required rather than `NSEvent.addGlobalMonitor` because `fn` and left/right
@@ -267,6 +357,7 @@ private func hotkeyTapCallback(
 final class HotkeyMonitor {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var tapThread: TapThread?
     private var state: TapState?
 
     var key: PushToTalkKey = .rightOption
@@ -321,13 +412,58 @@ final class HotkeyMonitor {
 
         self.tap = tap
         state.adopt(port: tap)
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            Log.hotkey.error("could not make a run loop source for the tap")
+            stop()
+            return false
+        }
         runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+        tapThread = TapThread(source: source)
         CGEvent.tapEnable(tap: tap, enable: true)
 
         Log.hotkey.info("listening for \(self.key.displayName)")
         return true
+    }
+
+    /// Whether the tap exists *and* the system still has it switched on.
+    ///
+    /// Both halves matter and they fail differently. A tap the system disabled for running
+    /// slowly announces itself with `.tapDisabledByTimeout`, which the callback re-arms from.
+    /// A tap that died because the app lost its Accessibility grant announces nothing at all:
+    /// the port is simply never delivered another event, and the key goes quiet for the rest
+    /// of the session with no error anywhere. This is the only way to find out.
+    var isArmed: Bool {
+        guard let tap else { return false }
+        return CGEvent.tapIsEnabled(tap: tap)
+    }
+
+    /// Puts a tap that has gone quiet back to work, rebuilding it if switching it on is not
+    /// enough.
+    ///
+    /// - Returns: whether the tap is armed afterwards.
+    @discardableResult
+    func rearm() -> Bool {
+        if let tap {
+            CGEvent.tapEnable(tap: tap, enable: true)
+            if CGEvent.tapIsEnabled(tap: tap) {
+                Log.hotkey.info("tap had been switched off — re-enabled")
+                return true
+            }
+        }
+        // Enabling did not take, so the port itself is gone. Build a new one.
+        Log.hotkey.error("tap is dead — rebuilding it")
+        return start()
+    }
+
+    /// Tells the tap the recording it thinks it is holding open has ended.
+    ///
+    /// Called from every route out of an active recording, not just the one the tap knows
+    /// about. A run can end because the user clicked Record, because the microphone never
+    /// delivered a sample, or because the double tap arrived while the previous utterance was
+    /// still being cleaned up and was declined — and after any of those the tap is still
+    /// latched, so the next press means "stop" to it and nothing to anyone else.
+    func clearLatch() {
+        state?.clearLatch()
     }
 
     func stop() {
@@ -335,8 +471,9 @@ final class HotkeyMonitor {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
         if let runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+            tapThread?.stop(source: runLoopSource)
         }
+        tapThread = nil
         tap = nil
         runLoopSource = nil
         state?.reset()

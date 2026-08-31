@@ -62,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = DictationController()
     private var hud: HUDPanel?
     private var stateObservation: NSObjectProtocol?
+    private var supervisor: Supervisor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A regular app now: dock icon, app menu, standard windows. The HUD is still a
@@ -103,6 +104,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         observeState()
+
+        // Started last, and started unconditionally — including when `activate` failed above,
+        // because "the hotkey is not armed" is exactly one of the things it watches for and
+        // it is how the app notices Accessibility being granted, or taken away, later on.
+        let supervisor = Supervisor(controller: controller) { [weak self] in self?.hud }
+        supervisor.start()
+        self.supervisor = supervisor
+
         Log.app.info("Mumble ready — hold \(Settings.shared.pushToTalkKey.displayName) to dictate")
     }
 
@@ -136,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         let isOpen = NSApp.windows.contains { $0.title == "Engine comparison" && $0.isVisible }
         UserDefaults.standard.set(isOpen, forKey: "comparisonWindowOpen")
+        supervisor?.stop()
         controller.deactivate()
     }
 

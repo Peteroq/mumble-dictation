@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreAudio
 import Foundation
 
@@ -49,6 +50,65 @@ struct AudioInputDevice: Equatable, Sendable, Identifiable {
     /// in, the picker grows a row while you dictate and every entry below it shifts down.
     private var isPlumbing: Bool {
         uid.hasPrefix("CADefaultDeviceAggregate") || Self.isHidden(id)
+    }
+
+    /// The device's actual input stream format, read from the device itself.
+    ///
+    /// This is the number `AVAudioEngine` would not tell the truth about. Its input node
+    /// caches whatever format it last resolved and keeps reporting that long after the
+    /// hardware has moved on — measured here as a node insisting on 48kHz across three
+    /// consecutive attempts while CoreAudio, asked directly, said 24kHz and the graph refused
+    /// the mismatch. Asking the device is the fix, and there is nothing between this call and
+    /// the driver to hold a stale answer.
+    static func inputFormat(of id: AudioDeviceID) -> AVAudioFormat? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamFormat,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var asbd = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &asbd) == noErr else {
+            return nil
+        }
+        guard asbd.mSampleRate > 0, asbd.mChannelsPerFrame > 0 else { return nil }
+        return AVAudioFormat(streamDescription: &asbd)
+    }
+
+    /// Whether the device still exists as far as the audio system is concerned.
+    static func isAlive(_ id: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var alive = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &alive) == noErr else {
+            return false
+        }
+        return alive != 0
+    }
+
+    /// Whether this device reaches the user over Bluetooth.
+    ///
+    /// Not used to decide anything about capture — see the note above about measuring rather
+    /// than guessing at wake-up time. It is used to say so in the interface, because a
+    /// headset that has to change profile before its microphone works behaves differently
+    /// enough that pretending otherwise is the unhelpful choice.
+    var isBluetooth: Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var transport = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &transport) == noErr else {
+            return false
+        }
+        return transport == kAudioDeviceTransportTypeBluetooth
+            || transport == kAudioDeviceTransportTypeBluetoothLE
     }
 
     /// The pinned device, if it is still around. Returns nil when the preference names

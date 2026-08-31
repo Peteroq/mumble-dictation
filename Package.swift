@@ -28,17 +28,36 @@ let package = Package(
             path: "Sources/MumbleCleanup",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // Objective-C, and only because Swift cannot do this at all.
+        //
+        // AVFAudio raises `NSException` for recoverable conditions — a tap installed against
+        // a format the bus has since moved off, which is what closing an AirPods case looks
+        // like from inside a recording. `try` does not catch those, and in an async function
+        // the unwind takes the task with it: no catch, no defer, no state ever set. One
+        // `@try` is the whole reason this target exists.
+        .target(
+            name: "MumbleObjC",
+            path: "Sources/MumbleObjC",
+            publicHeadersPath: "include"
+        ),
         .executableTarget(
             name: "Mumble",
             dependencies: [
                 "MumbleDictionary",
                 "MumbleCleanup",
+                "MumbleObjC",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             path: "Sources/Mumble",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]
+        ),
+        .testTarget(
+            name: "MumbleObjCTests",
+            dependencies: ["MumbleObjC"],
+            path: "Tests/MumbleObjCTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "MumbleCleanupTests",

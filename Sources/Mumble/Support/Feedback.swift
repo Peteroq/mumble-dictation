@@ -1,4 +1,6 @@
+import AppKit
 import AVFoundation
+import CoreAudio
 import Foundation
 
 /// The two short cues that bracket the microphone handoff: a rising whoosh while a device
@@ -15,36 +17,164 @@ enum Feedback: Hashable {
     /// Two-partial bell. Means "the mic is live, talk now".
     case ready
 
+    /// Played through `NSSound`, not `AVAudioPlayer`, and that is not arbitrary.
+    ///
+    /// `AVAudioPlayer` was the original choice and it is the wrong one here. It binds itself
+    /// to the output as configured when it was prepared, survives a route change as an
+    /// object, reports success from `play()`, and produces no sound — which is what "the
+    /// chime stopped happening" was for a week. Apple documents the same lying-success for
+    /// audio scheduled on an `AVAudioEngine` across a configuration change: completion
+    /// handlers fire as though it played.
+    ///
+    /// `NSSound` is the path the end-of-dictation Pop and Glass already use, and those were
+    /// never the ones that went missing.
     func play() {
-        guard let player = Self.player(for: self) else { return }
-        // Re-arming the head matters: hold, release, hold again inside half a second is
-        // normal use, and a player left at the end of its buffer plays nothing.
-        player.currentTime = 0
-        player.play()
+        let padded = self == .ready && Self.outputIsBluetooth
+        guard let sound = NSSound(data: Self.audio(for: self, padded: padded)) else {
+            Log.audio.error("cue \(String(describing: self), privacy: .public) could not be built")
+            return
+        }
+        sound.volume = volume
+        guard sound.play() else {
+            Log.audio.error("cue \(String(describing: self), privacy: .public) refused to play")
+            return
+        }
+        Log.audio.info(
+            """
+            cue \(String(describing: self), privacy: .public) playing — \
+            \(sound.duration, privacy: .public)s at volume \(volume, privacy: .public) \
+            on \(Self.outputDevice.name, privacy: .public)\
+            \(padded ? " (padded)" : "", privacy: .public)
+            """
+        )
+        Self.retain(sound, for: sound.duration)
     }
 
     /// Renders both cues up front. They fire on the path between key-down and the first
     /// word, which is the one stretch of this app where a few milliseconds are visible.
     static func prewarm() {
-        _ = player(for: .connecting)
-        _ = player(for: .ready)
+        _ = audio(for: .connecting, padded: false)
+        _ = audio(for: .ready, padded: false)
+        _ = audio(for: .ready, padded: true)
+        _ = silence
     }
 
-    // MARK: - Players
+    /// Opens the output route at key-down, so the ready chime is not the thing that has to
+    /// open it.
+    ///
+    /// A Bluetooth headset tears its audio link down when nothing is playing, and the first
+    /// sound after that silence loses its opening while the link comes back — a few hundred
+    /// milliseconds, which is most of a chime that only lasts half a second. It is why the
+    /// chime was missing on the first recording and audible on the second: the second one
+    /// arrived while the link was still warm from the first.
+    ///
+    /// Two seconds of near-silence, started when the key goes down, covers the whole
+    /// spin-up: the connecting whoosh at 180ms, and the chime whenever the microphone
+    /// actually goes live. Inaudible, and on a wired or built-in output it costs nothing but
+    /// a stream nobody hears.
+    static func wakeOutput() {
+        guard let sound = NSSound(data: silence) else { return }
+        sound.volume = 1
+        guard sound.play() else { return }
+        retain(sound, for: sound.duration)
+    }
 
-    private static var cache: [Feedback: AVAudioPlayer] = [:]
+    /// Two seconds of dither, not of zeroes.
+    ///
+    /// One least-significant bit, alternating. Inaudible at any volume — it is 90dB below a
+    /// speaking voice — but it is genuinely a signal, which matters: a stream of exact zeroes
+    /// is something a driver or a codec is entitled to notice and skip, and a link that was
+    /// never opened is not a link that was woken.
+    private static let silence: Data = {
+        let count = sampleRate * 2
+        var samples = [Float](repeating: 0, count: count)
+        let step = 1 / Float(Int16.max)
+        for index in 0..<count { samples[index] = index.isMultiple(of: 2) ? step : -step }
+        return wav(samples)
+    }()
 
-    private static func player(for cue: Feedback) -> AVAudioPlayer? {
-        if let cached = cache[cue] { return cached }
-        do {
-            let player = try AVAudioPlayer(data: wav(cue.samples))
-            player.volume = cue.volume
-            player.prepareToPlay()
-            cache[cue] = player
-            return player
-        } catch {
-            Log.audio.error("cue \(String(describing: cue), privacy: .public) failed: \(error.localizedDescription)")
-            return nil
+    private struct Rendering: Hashable {
+        let cue: Feedback
+        let padded: Bool
+    }
+
+    /// The rendered bytes are cached; a prepared player is not. Synthesising the waveform is
+    /// the part worth doing early, and building the sound at the call site is what keeps it
+    /// from binding to an output route that has since changed.
+    private static var rendered: [Rendering: Data] = [:]
+
+    /// Three hundred milliseconds of dither in front of the chime, for Bluetooth only.
+    ///
+    /// A Bluetooth headset rebuilds its audio link when the profile changes, and asking for
+    /// its microphone is what changes the profile. Padding moves the loss onto something
+    /// there is no cost to losing. Nothing is added on a wired or built-in output.
+    private static let leadIn: [Float] = {
+        let step = 1 / Float(Int16.max)
+        return (0..<(sampleRate * 3 / 10)).map { $0.isMultiple(of: 2) ? step : -step }
+    }()
+
+    private static func audio(for cue: Feedback, padded: Bool) -> Data {
+        let key = Rendering(cue: cue, padded: padded)
+        if let cached = rendered[key] { return cached }
+        let data = wav(padded ? leadIn + cue.samples : cue.samples)
+        rendered[key] = data
+        return data
+    }
+
+    // MARK: - Where the sound is going
+
+    /// The current default output, by name and transport.
+    ///
+    /// Logged with every cue, because "it played" and "it played somewhere you could hear it"
+    /// are different claims and only the second one is interesting. It is also how the
+    /// decision to pad gets made.
+    static var outputDevice: (name: String, isBluetooth: Bool) {
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id
+        ) == noErr else { return ("unknown", false) }
+
+        var name: CFString = "" as CFString
+        var nameSize = UInt32(MemoryLayout<CFString>.size)
+        var nameAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let resolved = AudioObjectGetPropertyData(id, &nameAddress, 0, nil, &nameSize, &name) == noErr
+            ? name as String
+            : "unknown"
+
+        var transport = UInt32(0)
+        var transportSize = UInt32(MemoryLayout<UInt32>.size)
+        var transportAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectGetPropertyData(id, &transportAddress, 0, nil, &transportSize, &transport)
+        return (resolved, transport == kAudioDeviceTransportTypeBluetooth
+            || transport == kAudioDeviceTransportTypeBluetoothLE)
+    }
+
+    static var outputIsBluetooth: Bool { outputDevice.isBluetooth }
+
+    /// A player released while it is still playing stops mid-note, so each one is held for
+    /// as long as it needs and dropped after.
+    private static var live: [ObjectIdentifier: NSSound] = [:]
+
+    private static func retain(_ player: NSSound, for duration: TimeInterval) {
+        let id = ObjectIdentifier(player)
+        live[id] = player
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(duration + 0.2))
+            live[id] = nil
         }
     }
 
