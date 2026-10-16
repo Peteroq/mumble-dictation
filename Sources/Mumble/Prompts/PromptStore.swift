@@ -118,7 +118,14 @@ final class PromptStore {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let library = try? decoder.decode(Library.self, from: data) else {
-            Log.app.error("prompts: could not read \(Self.fileURL.lastPathComponent, privacy: .public)")
+            // Move the unreadable file aside before anything can save over it. Starting empty
+            // and then writing on the next edit would replace the whole library with one
+            // prompt; a hand-edit typo should cost a fix-up, not the library.
+            let stamp = ISO8601DateFormatter().string(from: .now).replacingOccurrences(of: ":", with: "-")
+            let aside = Self.fileURL.deletingPathExtension()
+                .appendingPathExtension("unreadable-\(stamp).json")
+            try? FileManager.default.moveItem(at: Self.fileURL, to: aside)
+            Log.app.error("prompts: could not read \(Self.fileURL.lastPathComponent, privacy: .public); kept as \(aside.lastPathComponent, privacy: .public)")
             return
         }
         prompts = library.prompts

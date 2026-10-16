@@ -32,8 +32,11 @@ final class DictionaryStore {
     private(set) var revision = 0
 
     private var watcher: DispatchSourceFileSystemObject?
-    /// Set while we're writing, so our own save doesn't read back as an external edit.
-    private var isSaving = false
+    /// The text of our own last save. The watcher's event arrives after `save()` has
+    /// returned, so a flag set during the write can't tell our save from a hand edit — and
+    /// reloading our own save re-parses every entry under a new id, which silently drops an
+    /// edit made against an entry captured before it.
+    private var lastWritten: String?
 
     static var fileURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -124,11 +127,17 @@ final class DictionaryStore {
     // MARK: - Persistence
 
     private func load() {
+        // Missing mid-save — an editor that deletes and recreates — keeps what we had. If it
+        // is still missing a second later, `startWatching` treats it as deleted on purpose.
+        guard FileManager.default.fileExists(atPath: Self.fileURL.path) else { return }
+        // A file that exists but can't be read — mid-replace by an editor, or saved in an
+        // encoding other than UTF-8 — keeps what we had. Emptying the list here meant the
+        // next in-app edit wrote a file holding only that edit, over the user's own.
         guard let text = try? String(contentsOf: Self.fileURL, encoding: .utf8) else {
-            entries = []
-            revision += 1
+            Log.app.error("dictionary: could not read \(Self.fileURL.lastPathComponent, privacy: .public); keeping the current entries")
             return
         }
+        guard text != lastWritten else { return }
         entries = Self.parse(text)
         revision += 1
     }
@@ -161,11 +170,10 @@ final class DictionaryStore {
 
     private func save() {
         revision += 1
-        isSaving = true
-        defer { isSaving = false }
 
         let body = entries.map(\.fileLine).joined(separator: "\n")
         let text = Self.header + body + "\n"
+        lastWritten = text
         try? text.write(to: Self.fileURL, atomically: true, encoding: .utf8)
     }
 
@@ -186,11 +194,30 @@ final class DictionaryStore {
     ///
     /// Rearms after every event: an atomic write replaces the inode, so the descriptor we
     /// were watching is gone the moment the file changes — including when *we* save.
-    private func startWatching() {
+    private func startWatching(retrying: Bool = true) {
         watcher?.cancel()
 
         let descriptor = open(Self.fileURL.path, O_EVTONLY)
-        guard descriptor >= 0 else { return }
+        guard descriptor >= 0 else {
+            // An editor that saves by delete-then-create leaves a moment with no file to
+            // open. Giving up here stopped hand edits reaching the app for the rest of the
+            // session, so look again shortly. If it is still missing then, it was deleted on
+            // purpose: start a fresh one so there is something to watch.
+            guard retrying else { return }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                if FileManager.default.fileExists(atPath: Self.fileURL.path) {
+                    self.load()
+                } else if !self.entries.isEmpty {
+                    self.entries = []
+                    self.save()
+                }
+                // Once only: a file that can't be created is not going to start existing.
+                self.startWatching(retrying: false)
+            }
+            return
+        }
 
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
@@ -200,7 +227,7 @@ final class DictionaryStore {
 
         source.setEventHandler { [weak self] in
             guard let self else { return }
-            if !self.isSaving { self.load() }
+            self.load()
             self.startWatching()
         }
         source.setCancelHandler { close(descriptor) }

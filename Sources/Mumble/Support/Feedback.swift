@@ -140,15 +140,15 @@ enum Feedback: Hashable {
             AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id
         ) == noErr else { return ("unknown", false) }
 
-        var name: CFString = "" as CFString
-        var nameSize = UInt32(MemoryLayout<CFString>.size)
+        var name: Unmanaged<CFString>?
+        var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         var nameAddress = AudioObjectPropertyAddress(
             mSelector: kAudioObjectPropertyName,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
         let resolved = AudioObjectGetPropertyData(id, &nameAddress, 0, nil, &nameSize, &name) == noErr
-            ? name as String
+            ? (name?.takeRetainedValue() as String?) ?? "unknown"
             : "unknown"
 
         var transport = UInt32(0)

@@ -32,6 +32,17 @@ enum TextInjector {
         }
     }
 
+    /// Puts text on the clipboard and leaves it there, for when typing it would land in the
+    /// wrong place.
+    static func copy(_ text: String) {
+        guard !text.isEmpty else { return }
+        // A paste in flight would otherwise restore the old clipboard over this.
+        pendingRestore = nil
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
     private enum AXOutcome {
         case inserted
         case unverified(String)
@@ -111,18 +122,30 @@ enum TextInjector {
 
     // MARK: - Strategy 2: Pasteboard + ⌘V
 
+    /// The user's own clipboard, held while a paste is in flight, and the pasteboard
+    /// generation our text was written at.
+    ///
+    /// Shared across pastes because two can overlap: a second dictation landing inside the
+    /// first one's restore window would otherwise save the *first transcript* as "the user's
+    /// clipboard", the first restore would put the real one back before the second ⌘V, and
+    /// the second paste would type the user's old clipboard instead of what they just said.
+    private static var pendingRestore: (saved: [[NSPasteboard.PasteboardType: Data]]?, changeCount: Int)?
+
     private static func insertViaPasteboard(_ text: String) {
         let pasteboard = NSPasteboard.general
-        let saved = pasteboard.pasteboardItems?.compactMap { item -> [NSPasteboard.PasteboardType: Data] in
-            var copy: [NSPasteboard.PasteboardType: Data] = [:]
-            for type in item.types {
-                if let data = item.data(forType: type) { copy[type] = data }
+        let saved = pendingRestore.map(\.saved)
+            ?? pasteboard.pasteboardItems?.compactMap { item -> [NSPasteboard.PasteboardType: Data] in
+                var copy: [NSPasteboard.PasteboardType: Data] = [:]
+                for type in item.types {
+                    if let data = item.data(forType: type) { copy[type] = data }
+                }
+                return copy
             }
-            return copy
-        }
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        let written = pasteboard.changeCount
+        pendingRestore = (saved, written)
 
         Task { @MainActor in
             // Give the target app a moment to observe the new pasteboard generation before
@@ -134,7 +157,12 @@ enum TextInjector {
             // The paste is asynchronous in the target app; restore only once it's had time
             // to read the pasteboard.
             try? await Task.sleep(for: .milliseconds(500))
-            restore(saved, to: pasteboard)
+            // Only if nothing has written since: a later paste now owns the restore, and a
+            // copy the user made in the meantime is theirs to keep.
+            guard let pending = pendingRestore, pending.changeCount == written else { return }
+            pendingRestore = nil
+            guard pasteboard.changeCount == written else { return }
+            restore(pending.saved, to: pasteboard)
         }
     }
 

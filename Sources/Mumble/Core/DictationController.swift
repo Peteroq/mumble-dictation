@@ -121,6 +121,20 @@ final class DictationController {
     /// Timestamps for the dashboard: when the key went down, and when it came up.
     private var holdStarted: Date?
     private var releasedAt: Date?
+
+    /// Bumped every time a recording begins or is torn out from under itself. Each async path
+    /// captures the value it started with and checks it after every await, so a start that
+    /// returns late — a cold model load outlasting the hold — can no longer resume into the
+    /// *next* recording and take over its engine, its audio stream and its microphone.
+    private var session = 0
+
+    /// The session that most recently asked capture to start. A start that is superseded
+    /// while `capture.start` is in flight may only stop capture if nothing newer has asked
+    /// for it since — otherwise it would switch off the recording that replaced it.
+    private var captureOwner: Int?
+
+    /// The app that had focus when the key came up, which is the app the text is for.
+    private var targetApp: pid_t?
     private var engineName = ""
 
     /// Compare mode only: the recording, kept so every engine sees identical audio.
@@ -180,7 +194,7 @@ final class DictationController {
             // If none is — a double tap landing while the previous utterance is still being
             // cleaned up is the common case — the latch has to be taken back, or the tap
             // spends the next press stopping something that was never started.
-            guard state.isActive else { return hotkey.clearLatch() }
+            guard state.isActive, state != .finishing else { return hotkey.clearLatch() }
             isHandsFree = true
         }
         hotkey.onUnlatch = { [weak self] in self?.endDictation() }
@@ -211,6 +225,7 @@ final class DictationController {
     /// this could hang again, and the whole point is that this cannot.
     func forceReset(reason: String) {
         Log.app.error("forcing a reset: \(reason, privacy: .public)")
+        session += 1
         cancelConnectionFeedback()
         hotkey.clearLatch()
         utteranceFormatter = nil
@@ -271,6 +286,8 @@ final class DictationController {
 
     private func beginDictation() {
         guard case .idle = state else { return }
+        session += 1
+        let id = session
         state = .starting
         isHandsFree = false
         // Before the first thing that can fail, which is everything below.
@@ -306,16 +323,22 @@ final class DictationController {
         formatter.prewarm()
 
         Task { @MainActor in
+            // Set once the engine exists, so every stale exit below can close it.
+            var started: (any TranscriptionEngine)?
             do {
-                guard await Permissions.requestMicrophone() else {
+                let allowed = await Permissions.requestMicrophone()
+                guard id == session else { return }
+                guard allowed else {
                     fail("Microphone access is off. Enable it in System Settings ▸ Privacy & Security ▸ Microphone.")
                     return
                 }
 
                 let engine = makeEngine()
+                started = engine
                 self.engine = engine
 
                 let chunks = try await engine.start()
+                guard id == session else { return abandon(engine) }
 
                 // Compare mode captures in *Apple's* format, not a format of our choosing.
                 //
@@ -325,7 +348,11 @@ final class DictationController {
                 // int16/int32/float32), so the strict engine picks the format and the
                 // tolerant engine adapts. Both still replay the identical buffers.
                 let formatOwner: any TranscriptionEngine = isComparing ? AppleSpeechEngine() : engine
-                guard let format = await formatOwner.preferredInputFormat() else {
+                let preferred = await formatOwner.preferredInputFormat()
+                // The last await before capture is touched. Past this point a stale start
+                // would rebind the microphone out from under the recording that replaced it.
+                guard id == session else { return abandon(engine) }
+                guard let format = preferred else {
                     throw TranscriptionError.noAudioFormat
                 }
 
@@ -354,6 +381,7 @@ final class DictationController {
                 // uncatchable exception and left the app with no way back.
                 self.armLiveness()
 
+                captureOwner = id
                 let device = try await capture.start(
                     outputFormat: format,
                     preferredDeviceUID: Settings.shared.inputDeviceUID,
@@ -367,11 +395,22 @@ final class DictationController {
                         Task { @MainActor in self?.audioBecameLive() }
                     }
                 )
+                // Superseded while capture was starting — by a release, a failure or a
+                // reset whose `capture.stop()` landed before the device was bound, and so did
+                // nothing. Stop it now, unless a newer recording has already claimed capture.
+                guard id == session else {
+                    if captureOwner == id {
+                        capture.stop()
+                        captureOwner = nil
+                    }
+                    audioContinuation.finish()
+                    return abandon(engine)
+                }
                 self.inputDevice = device ?? self.inputDevice
 
                 // Bail out if the user already let go while we were spinning up.
                 guard case .starting = self.state else {
-                    await self.teardown()
+                    await self.teardown(session: id)
                     return
                 }
 
@@ -385,16 +424,44 @@ final class DictationController {
                 self.consumeTask = Task { @MainActor in
                     do {
                         for try await chunk in chunks {
+                            guard id == self.session else { return }
                             self.transcript = chunk.text
                         }
                     } catch {
-                        self.fail(error.localizedDescription)
+                        guard id == self.session else { return }
+                        // Already finishing: `endDictation` owns the tail and inserts what was
+                        // heard. Failing here would bump the session out from under it.
+                        if self.state == .finishing { return }
+                        // Keep what was already heard. An engine that dies mid-sentence should
+                        // cost the words after the failure, not the paragraph before it — the
+                        // same trade the stall watchdog makes.
+                        if case .listening = self.state,
+                           !self.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Log.speech.error("engine failed mid-utterance, keeping the partial: \(error.localizedDescription, privacy: .public)")
+                            self.endDictation()
+                        } else {
+                            self.fail(error.localizedDescription)
+                        }
                     }
                 }
             } catch {
+                // A failure from a start that has since been superseded belongs to nobody;
+                // failing here would tear down the recording that replaced it.
+                guard id == session else { return abandon(started) }
                 self.fail(error.localizedDescription)
             }
         }
+    }
+
+    /// Closes an engine whose recording was superseded before it was handed any audio.
+    ///
+    /// Whoever superseded it has usually called `finish()` already — but possibly while
+    /// `start()` was still in flight, before there was an analyzer to close. Finishing again
+    /// once start has returned is what actually releases it; both engines treat a second
+    /// `finish()` on an unfed session as a no-op.
+    private func abandon(_ engine: (any TranscriptionEngine)?) {
+        guard let engine else { return }
+        Task.detached { await engine.finish() }
     }
 
     /// Waits out a grace window before admitting the mic isn't ready yet.
@@ -431,6 +498,21 @@ final class DictationController {
     /// Five seconds without a sample. Armed *before* `capture.start`, not after, so a start
     /// that never returns is covered by it too.
     private func armLiveness() {
+        livenessTask?.cancel()
+        livenessTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            switch state {
+            case .starting, .connecting:
+                // Five seconds without a single sample is not a slow handshake, it's a
+                // device that isn't going to work. Say which one, since the whole point of
+                // following the system default is that it may not be the one the user
+                // expects.
+                fail("\(inputDevice?.name ?? "The microphone") isn't sending any audio. Pick a different input in Settings ▸ Microphone.")
+            default:
+                break
+            }
+        }
     }
 
     private func armConnectionFeedback() {
@@ -448,22 +530,6 @@ final class DictationController {
             guard !Task.isCancelled, case .starting = state else { return }
             state = .connecting
             if Settings.shared.soundEnabled { Feedback.connecting.play() }
-        }
-
-        livenessTask?.cancel()
-        livenessTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled else { return }
-            switch state {
-            case .starting, .connecting:
-                // Five seconds without a single sample is not a slow handshake, it's a
-                // device that isn't going to work. Say which one, since the whole point of
-                // following the system default is that it may not be the one the user
-                // expects.
-                fail("\(inputDevice?.name ?? "The microphone") isn't sending any audio. Pick a different input in Settings ▸ Microphone.")
-            default:
-                break
-            }
         }
     }
 
@@ -538,6 +604,10 @@ final class DictationController {
         // it and pasting the same utterance twice. The window is wide: Parakeet transcribes
         // inside `finish()`, and smart cleanup adds up to 4s on top.
         guard state.isActive, state != .finishing else { return }
+        // Let go before the microphone produced a sample. There is nothing to transcribe, and
+        // the start may still be in flight: superseding it makes it close its own engine and
+        // capture when it returns, instead of opening the mic after the user has let go.
+        if state == .starting || state == .connecting { session += 1 }
         cancelConnectionFeedback()
         hotkey.clearLatch()
         isHandsFree = false
@@ -545,20 +615,28 @@ final class DictationController {
         capture.stop()
         level = 0
         releasedAt = Date()
+        targetApp = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let id = session
 
         Task { @MainActor in
             // Drain every captured buffer into the engine before asking it to finalize,
             // or the tail of the utterance gets dropped.
             audioContinuation?.finish()
             audioContinuation = nil
-            recorded = await feedTask?.value ?? []
+            let feed = feedTask
             feedTask = nil
 
-            // Bounded, because these two awaits are the only thing standing between a
-            // wedged engine and a HUD stuck on "Transcribing…" that nothing but quitting
-            // the app can clear.
+            // Bounded, because these awaits are the only thing standing between a wedged
+            // engine and a HUD stuck on "Transcribing…" that nothing but quitting the app
+            // can clear.
+            let drained = await bounded(4, "audio drain", { _ = await feed?.value })
+            guard id == session else { return }
+            if drained { recorded = await feed?.value ?? [] }
             await bounded(6, "engine finish") { [engine] in await engine?.finish() }
             await bounded(3, "transcript drain") { [consumeTask] in await consumeTask?.value }
+            // Torn down while finishing — a forced reset, or a failure — and possibly a new
+            // recording already under way. Nothing here is ours to clear any more.
+            guard id == session else { return }
             consumeTask = nil
             engine = nil
 
@@ -576,9 +654,18 @@ final class DictationController {
                 return
             }
 
-            let cleaned = Settings.shared.cleanupEnabled
-                ? await (utteranceFormatter ?? makeFormatter()).format(raw)
-                : raw
+            // Bounded on top of the formatters' own timeouts: a task group waits for a child
+            // that ignores cancellation, so theirs are a request, and this is the guarantee.
+            let formatter = utteranceFormatter ?? makeFormatter()
+            var cleaned = raw
+            if Settings.shared.cleanupEnabled {
+                if let formatted = await bounded(10, "cleanup", { await formatter.format(raw) }) {
+                    cleaned = formatted
+                } else {
+                    cleaned = await RuleBasedFormatter(strength: Settings.shared.cleanupStrength).format(raw)
+                }
+            }
+            guard id == session else { return }
 
             // The dictionary runs last, and runs regardless of the cleanup setting. Biasing
             // only raises the odds of the right word; this is the pass that guarantees it,
@@ -589,8 +676,19 @@ final class DictationController {
             }
 
             recordRun(text: output, corrections: corrections)
-            TextInjector.insert(output)
-            if Settings.shared.soundEnabled { NSSound(named: "Pop")?.play() }
+            // Processing can take seconds after the key comes up. If focus moved in that
+            // time, typing would land in whatever the user switched to, so the text goes to
+            // the clipboard instead and stays in history.
+            let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            if let targetApp, let frontmost, targetApp != frontmost {
+                Log.inject.info("focus moved while processing — copied instead of typing")
+                TextInjector.copy(output)
+                if Settings.shared.soundEnabled { NSSound(named: "Tink")?.play() }
+            } else {
+                TextInjector.insert(output)
+                if Settings.shared.soundEnabled { NSSound(named: "Pop")?.play() }
+            }
+            targetApp = nil
 
             state = .idle
             transcript = ""
@@ -599,6 +697,7 @@ final class DictationController {
     }
 
     private func cancelDictation() {
+        session += 1
         cancelConnectionFeedback()
         hotkey.clearLatch()
         utteranceFormatter = nil
@@ -619,19 +718,22 @@ final class DictationController {
         level = 0
     }
 
-    private func teardown() async {
+    private func teardown(session id: Int) async {
         cancelConnectionFeedback()
         hotkey.clearLatch()
         utteranceFormatter = nil
         capture.stop()
         audioContinuation?.finish()
         audioContinuation = nil
-        await feedTask?.value
+        let feed = feedTask
         feedTask = nil
-        await engine?.finish()
-        engine = nil
+        let engine = self.engine
+        self.engine = nil
         consumeTask?.cancel()
         consumeTask = nil
+        await bounded(4, "audio drain") { _ = await feed?.value }
+        await bounded(6, "engine finish") { await engine?.finish() }
+        guard id == session else { return }
         state = .idle
     }
 
@@ -759,38 +861,46 @@ final class DictationController {
         _ label: String,
         _ work: @escaping @Sendable () async -> Void
     ) async -> Bool {
-        let completed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        await bounded(seconds, label, { await work(); return true }) ?? false
+    }
+
+    /// `bounded`, for work with a result: `nil` when it timed out.
+    private func bounded<T: Sendable>(
+        _ seconds: Double,
+        _ label: String,
+        _ work: @escaping @Sendable () async -> T
+    ) async -> T? {
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
             let once = ResumeOnce(continuation)
             Task.detached(priority: .userInitiated) {
-                await work()
-                once.resume(completed: true)
+                once.resume(await work())
             }
             Task.detached {
                 try? await Task.sleep(for: .seconds(seconds))
-                once.resume(completed: false)
+                once.resume(nil)
             }
         }
-        if !completed {
+        if result == nil {
             Log.speech.error("\(label, privacy: .public) timed out after \(seconds)s — abandoned")
         }
-        return completed
+        return result
     }
 
     /// Resumes a continuation exactly once, whichever racer gets there first.
-    private final class ResumeOnce: @unchecked Sendable {
+    private final class ResumeOnce<T: Sendable>: @unchecked Sendable {
         private let lock = NSLock()
-        private var continuation: CheckedContinuation<Bool, Never>?
+        private var continuation: CheckedContinuation<T?, Never>?
 
-        init(_ continuation: CheckedContinuation<Bool, Never>) {
+        init(_ continuation: CheckedContinuation<T?, Never>) {
             self.continuation = continuation
         }
 
-        func resume(completed: Bool) {
+        func resume(_ value: T?) {
             lock.lock()
             let pending = continuation
             continuation = nil
             lock.unlock()
-            pending?.resume(returning: completed)
+            pending?.resume(returning: value)
         }
     }
 
@@ -806,6 +916,7 @@ final class DictationController {
     }
 
     private func fail(_ message: String) {
+        session += 1
         cancelConnectionFeedback()
         hotkey.clearLatch()
         utteranceFormatter = nil
@@ -815,7 +926,11 @@ final class DictationController {
         audioContinuation = nil
         feedTask?.cancel()
         feedTask = nil
-        engine = nil
+        // Finished, not just dropped: an analyzer or a Parakeet session left open here was
+        // leaked on every liveness or startup timeout.
+        let engine = self.engine
+        self.engine = nil
+        Task.detached { await engine?.finish() }
         consumeTask?.cancel()
         consumeTask = nil
         state = .error(message)

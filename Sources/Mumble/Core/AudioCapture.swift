@@ -192,9 +192,10 @@ final class AudioCapture: @unchecked Sendable {
         state.unlock()
         guard wasRunning else { return }
 
-        onBuffer = nil
-        onLevel = nil
-        onReady = nil
+        // The callbacks are not cleared here. The IOProc keeps running until teardown stops
+        // it on the control queue, and releasing a closure on this thread while the audio
+        // thread is calling it is a use-after-free. Teardown clears them once the proc is
+        // destroyed and can never be called again.
         control.async { [weak self] in
             self?.teardown()
             Log.audio.info("capture stopped")
@@ -218,6 +219,9 @@ final class AudioCapture: @unchecked Sendable {
             AudioDeviceStop(device, proc)
             AudioDeviceDestroyIOProcID(device, proc)
         }
+        onBuffer = nil
+        onLevel = nil
+        onReady = nil
         converter = nil
         inputFormat = nil
         hasDeliveredAudio = false
