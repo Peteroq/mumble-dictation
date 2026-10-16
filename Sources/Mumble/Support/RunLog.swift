@@ -102,8 +102,15 @@ enum RunLog {
         guard var line = try? encoder.encode(run) else { return }
         line.append(0x0A) // newline
 
-        if let handle = try? FileHandle(forWritingTo: runsURL) {
+        if let handle = try? FileHandle(forUpdating: runsURL) {
             defer { try? handle.close() }
+            // A crash mid-append can leave the last line without its newline. Appending
+            // straight onto it would merge two runs into one undecodable line and lose both.
+            if let end = try? handle.seekToEnd(), end > 0,
+               (try? handle.seek(toOffset: end - 1)) != nil,
+               let last = try? handle.read(upToCount: 1), last != Data([0x0A]) {
+                line.insert(0x0A, at: 0)
+            }
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: line)
         } else {

@@ -126,6 +126,17 @@ private final class TapState: @unchecked Sendable {
     func reEnable() {
         lock.lock()
         let port = port
+        lock.unlock()
+
+        if let port { CGEvent.tapEnable(tap: port, enable: true) }
+        windDown()
+    }
+
+    /// Winds the state machine back to rest, synthesizing the release (or unlatch) for any
+    /// hold in progress. Shared by a re-enabled tap and a rebuilt one: either way the events
+    /// in between are gone, and dropping the hold silently leaves the microphone open.
+    func windDown() {
+        lock.lock()
         let wasPressed = isPressed
         let wasLatched = isLatched
         pendingRelease?.cancel()
@@ -136,7 +147,6 @@ private final class TapState: @unchecked Sendable {
         ignoresNextRelease = false
         lock.unlock()
 
-        if let port { CGEvent.tapEnable(tap: port, enable: true) }
         if wasLatched {
             emit(.unlatch)
         } else if wasPressed {
@@ -322,15 +332,22 @@ private final class TapThread: @unchecked Sendable {
     /// Blocks until the thread's run loop exists and the source is on it. That wait is
     /// bounded by a thread start, and returning before the tap is live would mean the first
     /// key press after launch quietly did nothing.
-    init(source: CFRunLoopSource) {
+    ///
+    /// `owner` is the tap's refcon. The tap is handed it unretained, so the thread holds it
+    /// until its run loop has returned: removing the source from another thread does not wait
+    /// for a callback already in flight, and freeing the state under one is a use-after-free.
+    init(source: CFRunLoopSource, owner: AnyObject) {
         nonisolated(unsafe) let source = source
+        nonisolated(unsafe) let owner = owner
         let thread = Thread { [self] in
-            runLoop = CFRunLoopGetCurrent()
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
-            started.signal()
-            // A run loop with no input sources returns immediately, which is why the source
-            // goes on first.
-            CFRunLoopRun()
+            withExtendedLifetime(owner) {
+                runLoop = CFRunLoopGetCurrent()
+                CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+                started.signal()
+                // A run loop with no input sources returns immediately, which is why the source
+                // goes on first.
+                CFRunLoopRun()
+            }
         }
         thread.name = "ai.pivotstudio.mumble.hotkey"
         // Above default, below real-time. The tap is on the path of every modifier press on
@@ -418,7 +435,7 @@ final class HotkeyMonitor {
             return false
         }
         runLoopSource = source
-        tapThread = TapThread(source: source)
+        tapThread = TapThread(source: source, owner: state)
         CGEvent.tapEnable(tap: tap, enable: true)
 
         Log.hotkey.info("listening for \(self.key.displayName)")
@@ -450,8 +467,11 @@ final class HotkeyMonitor {
                 return true
             }
         }
-        // Enabling did not take, so the port itself is gone. Build a new one.
+        // Enabling did not take, so the port itself is gone. Build a new one — after closing
+        // out any hold in progress, because the new tap starts at rest and would otherwise
+        // read the user's real key-up as a duplicate and never end the recording.
         Log.hotkey.error("tap is dead — rebuilding it")
+        state?.windDown()
         return start()
     }
 
@@ -474,11 +494,12 @@ final class HotkeyMonitor {
             tapThread?.stop(source: runLoopSource)
         }
         tapThread = nil
+        if let tap { CFMachPortInvalidate(tap) }
         tap = nil
         runLoopSource = nil
         state?.reset()
-        // Released only after the source is off the run loop, so the callback can no longer
-        // be handed a pointer to it.
+        // The tap thread holds its own reference until its run loop exits, so a callback
+        // already in flight finishes against live memory.
         state = nil
     }
 }
