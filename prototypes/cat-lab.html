@@ -1,0 +1,1656 @@
+<title>Mumble Cat Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=Azeret+Mono:wght@400;500&display=swap">
+
+<style>
+/* The rail and the ground are the orb lab's, because they work and because two labs that look
+   alike are two labs you can flip between. Nothing below the rail is shared: the cat is a flat
+   field, not a point cloud, and none of the orb's geometry survives here. */
+:root {
+  --void:      #05060A;
+  --panel:     #0D1017;
+  --panel-up:  #12161F;
+  --seam:      #1B2029;
+  --ink:       #E8ECF2;
+  --ink-dim:   #79828F;
+  --ink-faint: #49515C;
+  --lime:      #C7F24A;
+  --violet:    #A895FF;
+
+  --step-0: 0.75rem;
+  --step-1: 0.8125rem;
+  --step-2: 0.9375rem;
+  --step-3: 1.25rem;
+
+  --rail: 318px;
+  --r-sm: 10px;
+  --r-md: 16px;
+  --r-lg: 22px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--void);
+  color: var(--ink);
+  font-family: "Familjen Grotesk", ui-sans-serif, system-ui, sans-serif;
+  font-size: var(--step-2);
+  line-height: 1.45;
+  overflow: hidden;
+}
+
+/* ---------- Stage ---------- */
+
+#stage { position: fixed; inset: 0 calc(var(--rail) + 36px) 0 0; display: grid; place-items: center; }
+#gl { display: block; width: 100%; height: 100%; }
+#gl[data-sized="true"] { outline: 1px solid var(--seam); outline-offset: 12px; }
+#gl[data-capsule="true"] { border-radius: 999px; outline-offset: 12px; }
+
+#stage[data-drop="true"]::after {
+  content: "Drop the artwork to re-key the silhouette";
+  position: absolute;
+  inset: 18px;
+  display: grid;
+  place-items: center;
+  font-size: var(--step-1);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--void) 72%, transparent);
+  border: 1px dashed var(--violet);
+  border-radius: var(--r-lg);
+  pointer-events: none;
+}
+
+#fallback {
+  position: fixed; inset: 0;
+  display: none;
+  place-content: center;
+  padding: 2rem;
+  text-align: center;
+}
+#fallback p { max-width: 44ch; margin: 0 auto; color: var(--ink-dim); }
+
+/* ---------- Rail ---------- */
+
+#rail {
+  position: fixed;
+  top: 18px; right: 18px; bottom: 18px;
+  width: var(--rail);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 20px;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--seam);
+  border-radius: var(--r-lg);
+  z-index: 2;
+}
+
+#rail::-webkit-scrollbar { width: 8px; }
+#rail::-webkit-scrollbar-thumb { background: var(--seam); border-radius: 99px; }
+
+.masthead { display: flex; flex-direction: column; gap: 4px; padding-bottom: 18px; }
+.masthead h1 {
+  margin: 0;
+  font-size: var(--step-3);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+.masthead p { margin: 0; font-size: var(--step-1); color: var(--ink-dim); }
+
+.group { display: flex; flex-direction: column; gap: 14px; padding: 18px 0; border-top: 1px solid var(--seam); }
+.group > h2 {
+  margin: 0;
+  font-size: var(--step-0);
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.field { display: flex; flex-direction: column; gap: 7px; }
+.field > .row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.field label { font-size: var(--step-1); color: var(--ink-dim); }
+.field output {
+  font-family: "Azeret Mono", ui-monospace, monospace;
+  font-size: var(--step-0);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 3px; margin: 5px 0;
+  background: var(--seam);
+  border-radius: 99px;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 15px; height: 15px;
+  background: var(--lime);
+  border: none; border-radius: 50%;
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 15px; height: 15px;
+  background: var(--lime);
+  border: none; border-radius: 50%;
+  cursor: pointer;
+}
+input[type="range"]:focus-visible { outline: 2px solid var(--lime); outline-offset: 5px; }
+
+.seg { display: flex; gap: 5px; }
+.seg button {
+  flex: 1;
+  padding: 8px 4px;
+  font-family: inherit;
+  font-size: var(--step-0);
+  font-weight: 500;
+  color: var(--ink-dim);
+  background: var(--panel-up);
+  border: 1px solid var(--seam);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] {
+  color: var(--void);
+  background: var(--lime);
+  border-color: var(--lime);
+}
+.seg button:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+
+.note { margin: 0; font-size: var(--step-0); line-height: 1.5; color: var(--ink-faint); }
+.note[data-tone="warn"] { color: var(--violet); }
+
+.maskRow { display: flex; align-items: center; gap: 12px; }
+#maskPreview {
+  width: 68px; height: 68px;
+  flex: none;
+  image-rendering: pixelated;
+  background: var(--void);
+  border: 1px solid var(--seam);
+  border-radius: var(--r-sm);
+}
+.maskRow .note { flex: 1; }
+
+/* ---------- Export ---------- */
+
+.export { display: flex; flex-direction: column; gap: 10px; }
+.export pre {
+  margin: 0;
+  padding: 12px;
+  max-height: 190px;
+  overflow: auto;
+  font-family: "Azeret Mono", ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  background: var(--void);
+  border: 1px solid var(--seam);
+  border-radius: var(--r-sm);
+  tab-size: 2;
+}
+.export pre::-webkit-scrollbar { width: 8px; height: 8px; }
+.export pre::-webkit-scrollbar-thumb { background: var(--seam); border-radius: 99px; }
+
+button.wide {
+  width: 100%;
+  padding: 10px;
+  font-family: inherit;
+  font-size: var(--step-1);
+  font-weight: 600;
+  color: var(--void);
+  background: var(--ink);
+  border: none;
+  border-radius: 99px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+button.wide:hover { background: var(--lime); }
+button.wide:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+button.ghost { color: var(--ink); background: var(--panel-up); border: 1px solid var(--seam); }
+button.ghost:hover { color: var(--void); }
+
+/* ---------- Status strip ---------- */
+
+#status {
+  position: fixed;
+  left: 18px; bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 11px 18px;
+  font-family: "Azeret Mono", ui-monospace, monospace;
+  font-size: var(--step-0);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--seam);
+  border-radius: 99px;
+  z-index: 2;
+}
+#status b { font-weight: 500; color: var(--ink); }
+#status .div { width: 1px; height: 14px; background: var(--seam); }
+
+#levelTrack {
+  position: relative;
+  width: 88px; height: 3px;
+  background: var(--seam);
+  border-radius: 99px;
+  overflow: hidden;
+}
+#levelFill {
+  position: absolute; inset: 0;
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--lime), var(--violet));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 1ms !important; }
+}
+
+@media (max-width: 820px) {
+  :root { --rail: auto; }
+  body { overflow: auto; }
+  #stage { position: relative; inset: auto; height: 58vh; }
+  #rail { position: relative; inset: auto; width: auto; margin: 14px; max-height: none; }
+  #status { position: relative; left: auto; bottom: auto; margin: 0 14px 14px; flex-wrap: wrap; border-radius: var(--r-md); }
+}
+</style>
+
+<div id="stage"><canvas id="gl"></canvas></div>
+
+<div id="fallback">
+  <p>This prototype needs WebGL2, which this browser did not provide. Everything else on the
+  page is inert without it.</p>
+</div>
+
+<aside id="rail">
+  <div class="masthead">
+    <h1>Cat Lab</h1>
+    <p>A flat field, not a model: one silhouette, an edge that glows, and grain the edge
+    dissolves into.</p>
+  </div>
+
+  <section class="group">
+    <h2>Silhouette</h2>
+    <div class="maskRow">
+      <canvas id="maskPreview" width="96" height="96"></canvas>
+      <p class="note" id="maskNote">Drawn from primitives, so the lab runs with no artwork.
+      Drop a PNG on the stage to key the real cat out of its white ground.</p>
+    </div>
+    <button type="button" class="wide ghost" id="pickBtn">Choose artwork…</button>
+    <input type="file" id="fileInput" accept="image/*" hidden>
+    <div class="field">
+      <div class="row"><label for="keyThreshold">Key threshold</label><output for="keyThreshold" id="keyThresholdOut">0.45</output></div>
+      <input type="range" id="keyThreshold" min="0.06" max="0.9" step="0.01" value="0.45">
+      <p class="note">Where in the artwork's soft edge the silhouette is cut. The reference is a
+      blurred shape, so this picks which blur contour becomes the body.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="scale">Scale</label><output for="scale" id="scaleOut">0.86</output></div>
+      <input type="range" id="scale" min="0.3" max="1.6" step="0.01" value="0.86">
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Frame</h2>
+    <div class="field">
+      <div class="row"><label id="sizeLabel">Render size</label></div>
+      <div class="seg" role="group" aria-labelledby="sizeLabel">
+        <button type="button" data-size="full" aria-pressed="true">Full</button>
+        <button type="button" data-size="pill" aria-pressed="false">Pill</button>
+        <button type="button" data-size="orb" aria-pressed="false">Orb</button>
+        <button type="button" data-size="slot" aria-pressed="false">Slot</button>
+      </div>
+      <p class="note" id="sizeNote">Fills the window. The presets are the HUD's real sizes —
+      grain and blur are measured in pixels, so they only behave honestly at the true
+      resolution.</p>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Body</h2>
+    <div class="field">
+      <div class="row"><label for="edgeSoft">Edge softness</label><output for="edgeSoft" id="edgeSoftOut">0.020</output></div>
+      <input type="range" id="edgeSoft" min="0.002" max="0.2" step="0.002" value="0.02">
+      <p class="note">The width of the coverage ramp before any grain or blur touches it. Keep it
+      tight — the diffusion below is what should soften the outline, not this.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="core">Core light</label><output for="core" id="coreOut">0.020</output></div>
+      <input type="range" id="core" min="0" max="0.5" step="0.005" value="0.02">
+      <p class="note">What the black body is allowed to emit. Near zero on purpose: the cat is a
+      hole in the light, and the light is only at its edge.</p>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Edge light</h2>
+    <div class="field">
+      <div class="row"><label for="outerWidth">Outer width</label><output for="outerWidth" id="outerWidthOut">0.090</output></div>
+      <input type="range" id="outerWidth" min="0.005" max="0.5" step="0.005" value="0.09">
+      <p class="note">How far the glow reaches out past the outline.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="outerGain">Outer gain</label><output for="outerGain" id="outerGainOut">1.45</output></div>
+      <input type="range" id="outerGain" min="0" max="4" step="0.01" value="1.45">
+    </div>
+    <div class="field">
+      <div class="row"><label for="innerWidth">Inner width</label><output for="innerWidth" id="innerWidthOut">0.045</output></div>
+      <input type="range" id="innerWidth" min="0.002" max="0.4" step="0.002" value="0.045">
+      <p class="note">How far it bleeds back inside. Small keeps the body black; large fills the
+      cat in and loses the shape.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="innerGain">Inner gain</label><output for="innerGain" id="innerGainOut">0.85</output></div>
+      <input type="range" id="innerGain" min="0" max="4" step="0.01" value="0.85">
+    </div>
+    <div class="field">
+      <div class="row"><label for="lightAngle">Light angle</label><output for="lightAngle" id="lightAngleOut">-42°</output></div>
+      <input type="range" id="lightAngle" min="-180" max="180" step="1" value="-42">
+      <p class="note">Which side of the cat the ramp starts on. The reference lights the lower
+      right in cyan and lets it run round to magenta.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="lightWrap">Light wrap</label><output for="lightWrap" id="lightWrapOut">0.62</output></div>
+      <input type="range" id="lightWrap" min="0" max="1" step="0.01" value="0.62">
+      <p class="note">How much of the outline the lit side covers. Low is a rim on one edge, high
+      is an even halo all the way round.</p>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Diffusion</h2>
+    <div class="field">
+      <div class="row"><label for="blur">Blur</label><output for="blur" id="blurOut">2.40</output></div>
+      <input type="range" id="blur" min="0" max="6" step="0.05" value="2.4">
+      <p class="note">Progressive: none at the middle of the body, full at the outline and
+      beyond. It is a mip level, so it costs the same whatever you set it to.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="blurReach">Blur reach</label><output for="blurReach" id="blurReachOut">0.28</output></div>
+      <input type="range" id="blurReach" min="0.02" max="0.9" step="0.01" value="0.28">
+      <p class="note">How far in from the outline the blur starts. Past this depth the body is
+      sharp.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="halo">Halo</label><output for="halo" id="haloOut">0.55</output></div>
+      <input type="range" id="halo" min="0" max="2.5" step="0.01" value="0.55">
+      <p class="note">A very low-resolution copy added back on top — the wide, soft bloom that
+      makes the whole shape sit in its own light.</p>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Grain</h2>
+    <div class="field">
+      <div class="row"><label for="grain">Amount</label><output for="grain" id="grainOut">0.26</output></div>
+      <input type="range" id="grain" min="0" max="0.8" step="0.005" value="0.26">
+      <p class="note">Deliberately past what film would do. Applied before the tone map, so it
+      lives in the picture rather than on top of it.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="grainSize">Size</label><output for="grainSize" id="grainSizeOut">1.6</output></div>
+      <input type="range" id="grainSize" min="0.5" max="8" step="0.1" value="1.6">
+      <p class="note">Pixels per grain. Above about 3 it stops reading as grain and starts reading
+      as a dither pattern, which is its own look.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="dissolve">Edge dissolve</label><output for="dissolve" id="dissolveOut">0.70</output></div>
+      <input type="range" id="dissolve" min="0" max="1.5" step="0.01" value="0.7">
+      <p class="note">The grain eating into the coverage instead of sitting on the colour. This is
+      what breaks the outline into specks rather than fading it as a clean gradient — the whole
+      point of the look.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="dissolveReach">Dissolve reach</label><output for="dissolveReach" id="dissolveReachOut">0.20</output></div>
+      <input type="range" id="dissolveReach" min="0.02" max="0.8" step="0.01" value="0.2">
+      <p class="note">How deep into the body the dissolve bites. Deep enough and the cat is made
+      of specks; shallow and only its outline is.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="grainRate">Boil</label><output for="grainRate" id="grainRateOut">10</output></div>
+      <input type="range" id="grainRate" min="0" max="60" step="1" value="10">
+      <p class="note">New grain per second. Zero freezes it — still grain, no shimmer. Around 10
+      is film; 60 is television static.</p>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Motion</h2>
+    <div class="field">
+      <div class="row"><label for="warp">Edge drift</label><output for="warp" id="warpOut">0.030</output></div>
+      <input type="range" id="warp" min="0" max="0.15" step="0.002" value="0.03">
+      <p class="note">Noise pushed into the distance field, so the outline breathes and wanders
+      instead of holding still. The single most alive-looking control here.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="warpScale">Drift scale</label><output for="warpScale" id="warpScaleOut">2.40</output></div>
+      <input type="range" id="warpScale" min="0.4" max="8" step="0.05" value="2.4">
+    </div>
+    <div class="field">
+      <div class="row"><label for="warpRate">Drift rate</label><output for="warpRate" id="warpRateOut">0.28</output></div>
+      <input type="range" id="warpRate" min="0" max="1.5" step="0.01" value="0.28">
+    </div>
+    <div class="field">
+      <div class="row"><label for="bob">Bob</label><output for="bob" id="bobOut">0.030</output></div>
+      <input type="range" id="bob" min="0" max="0.2" step="0.002" value="0.03">
+    </div>
+    <div class="field">
+      <div class="row"><label for="bobRate">Bob rate</label><output for="bobRate" id="bobRateOut">0.42</output></div>
+      <input type="range" id="bobRate" min="0.05" max="2" step="0.01" value="0.42">
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Eyes</h2>
+    <div class="field">
+      <div class="row"><label for="eyeSize">Size</label><output for="eyeSize" id="eyeSizeOut">0.062</output></div>
+      <input type="range" id="eyeSize" min="0" max="0.2" step="0.002" value="0.062">
+    </div>
+    <div class="field">
+      <div class="row"><label for="eyeGlow">Glow</label><output for="eyeGlow" id="eyeGlowOut">2.20</output></div>
+      <input type="range" id="eyeGlow" min="0" max="6" step="0.05" value="2.2">
+    </div>
+    <div class="field">
+      <div class="row"><label for="eyeSoft">Softness</label><output for="eyeSoft" id="eyeSoftOut">0.10</output></div>
+      <input type="range" id="eyeSoft" min="0.01" max="0.9" step="0.01" value="0.1">
+    </div>
+    <div class="field">
+      <div class="row"><label for="blinkRate">Blink</label><output for="blinkRate" id="blinkRateOut">0.18</output></div>
+      <input type="range" id="blinkRate" min="0" max="0.8" step="0.01" value="0.18">
+      <p class="note">Blinks per second, jittered. Zero holds them open.</p>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Drive</h2>
+    <div class="field">
+      <div class="row"><label id="sourceLabel">Level source</label></div>
+      <div class="seg" role="group" aria-labelledby="sourceLabel">
+        <button type="button" data-source="sim" aria-pressed="true">Speech</button>
+        <button type="button" data-source="mic" aria-pressed="false">Microphone</button>
+        <button type="button" data-source="manual" aria-pressed="false">Manual</button>
+      </div>
+      <p class="note" id="sourceNote">A synthetic speech envelope — syllables at about 4&nbsp;Hz, with pauses for breath.</p>
+    </div>
+    <div class="field" id="manualField" hidden>
+      <div class="row"><label for="manual">Held level</label><output for="manual" id="manualOut">0.60</output></div>
+      <input type="range" id="manual" min="0" max="1" step="0.01" value="0.6">
+    </div>
+    <div class="field">
+      <div class="row"><label for="reactivity">Reactivity</label><output for="reactivity" id="reactivityOut">0.70</output></div>
+      <input type="range" id="reactivity" min="0" max="1" step="0.01" value="0.7">
+      <p class="note">How much of the edge light is voice and how much is always on.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="pulse">Pulse</label><output for="pulse" id="pulseOut">0.060</output></div>
+      <input type="range" id="pulse" min="0" max="0.3" step="0.002" value="0.06">
+      <p class="note">How much the whole cat swells at full voice.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="bloomOnVoice">Voice into diffusion</label><output for="bloomOnVoice" id="bloomOnVoiceOut">0.35</output></div>
+      <input type="range" id="bloomOnVoice" min="0" max="1.5" step="0.01" value="0.35">
+      <p class="note">Louder also means softer-edged, so speech reads as the cat diffusing rather
+      than only as it brightening.</p>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Colour</h2>
+    <div class="field">
+      <div class="row"><label id="paletteLabel">Gradient</label></div>
+      <div class="seg" role="group" aria-labelledby="paletteLabel">
+        <button type="button" data-palette="night" aria-pressed="true">Night</button>
+        <button type="button" data-palette="prism" aria-pressed="false">Prism</button>
+        <button type="button" data-palette="mumble" aria-pressed="false">Mumble</button>
+      </div>
+      <p class="note" id="paletteNote">Cyan through violet to magenta — the reference's own edge
+      light, warm nowhere.</p>
+    </div>
+    <div class="field">
+      <div class="row"><label for="exposure">Exposure</label><output for="exposure" id="exposureOut">1.00</output></div>
+      <input type="range" id="exposure" min="0.3" max="3" step="0.01" value="1">
+    </div>
+    <div class="field">
+      <div class="row"><label for="vignette">Vignette</label><output for="vignette" id="vignetteOut">0.30</output></div>
+      <input type="range" id="vignette" min="0" max="1" step="0.01" value="0.3">
+    </div>
+  </section>
+
+  <section class="group export">
+    <h2>Port</h2>
+    <p class="note">Everything here is one fragment shader over a distance field, so the Metal
+    port is a transliteration plus the baked mask.</p>
+    <pre id="exportBlock" tabindex="0"></pre>
+    <button type="button" class="wide" id="copyBtn">Copy parameters</button>
+    <button type="button" class="wide ghost" id="maskBtn">Download mask (signed distance PNG)</button>
+  </section>
+</aside>
+
+<div id="status">
+  <span>Level <b id="levelOut">0.00</b></span>
+  <div id="levelTrack"><div id="levelFill"></div></div>
+  <div class="div"></div>
+  <span><b id="resOut">0&times;0</b></span>
+  <div class="div"></div>
+  <span><b id="fpsOut">60</b> fps</span>
+</div>
+
+<script>
+"use strict";
+
+const canvas = document.getElementById("gl");
+const gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
+
+if (!gl) {
+  document.getElementById("stage").style.display = "none";
+  document.getElementById("rail").style.display = "none";
+  document.getElementById("status").style.display = "none";
+  document.getElementById("fallback").style.display = "grid";
+  throw new Error("WebGL2 unavailable");
+}
+
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* Half-float targets so the edge light is allowed above 1.0 before the tone map sees it. Without
+   them the glow clips to white at its brightest and the ramp loses its top end. */
+const floatOK = !!gl.getExtension("EXT_color_buffer_float");
+const TARGET_FORMAT = floatOK ? gl.RGBA16F : gl.RGBA8;
+const TARGET_TYPE = floatOK ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+
+const el = (id) => document.getElementById(id);
+
+/* ------------------------------------------------------------------ shader plumbing */
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(shader) || "compile failed");
+  }
+  return shader;
+}
+
+function link(vertexSource, fragmentSource) {
+  const program = gl.createProgram();
+  gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+  gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(program) || "link failed");
+  }
+  const uniforms = {};
+  const count = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < count; i++) {
+    const name = gl.getActiveUniform(program, i).name.replace("[0]", "");
+    uniforms[name] = gl.getUniformLocation(program, name);
+  }
+  return { program, u: uniforms };
+}
+
+/* Fullscreen coverage from vertex ids alone — no buffer, no attribute. Both passes use it. */
+const QUAD_VERT = `#version 300 es
+precision highp float;
+out vec2 vUv;
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  vUv = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+`;
+
+/* Value noise rather than the orb lab's simplex. This is a 2D field being pushed around by four
+   octaves, not a sphere being displaced: the cheaper function is indistinguishable here and it
+   transliterates to MSL without carrying a permutation table across. */
+const NOISE_GLSL = `
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+
+float valueNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+}
+
+float fbm(vec2 p) {
+  float sum = 0.0;
+  float amp = 0.5;
+  for (int i = 0; i < 4; i++) {
+    sum += valueNoise(p) * amp;
+    p = p * 2.02 + vec2(17.3, 9.1);
+    amp *= 0.5;
+  }
+  return sum;
+}
+`;
+
+/* ------------------------------------------------------------------ pass one: the cat */
+
+/* Nothing is drawn. Every pixel asks how far it is from the outline and answers with a colour,
+   which is why this reads as light rather than as a rendered object. */
+const SHAPE_FRAG = `#version 300 es
+precision highp float;
+
+in vec2 vUv;
+
+uniform sampler2D uMask;
+uniform vec2 uResolution;
+uniform float uTime;
+uniform float uLevel;
+uniform float uReactivity;
+uniform float uScale;
+uniform vec2 uOffset;
+uniform float uPulse;
+uniform float uEdgeSoft;
+uniform float uCore;
+uniform float uOuterWidth;
+uniform float uOuterGain;
+uniform float uInnerWidth;
+uniform float uInnerGain;
+uniform float uLightAngle;
+uniform float uLightWrap;
+uniform float uWarp;
+uniform float uWarpScale;
+uniform float uWarpRate;
+uniform vec2 uEyeA;
+uniform vec2 uEyeB;
+uniform float uEyeSize;
+uniform float uEyeGlow;
+uniform float uEyeSoft;
+uniform float uBlink;
+uniform vec3 uColorA;
+uniform vec3 uColorB;
+uniform vec3 uColorC;
+
+out vec4 fragColor;
+
+${NOISE_GLSL}
+
+vec3 ramp(float t) {
+  t = clamp(t, 0.0, 1.0);
+  return t < 0.5 ? mix(uColorA, uColorB, t * 2.0)
+                 : mix(uColorB, uColorC, (t - 0.5) * 2.0);
+}
+
+/* Off the field the clamped sampler would keep returning the border's distance, which wraps the
+   glow around the edge of the frame. Anything outside is simply far away. */
+float sampleDistance(vec2 p) {
+  vec2 uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return -1.0;
+  return texture(uMask, uv).r;
+}
+
+float eyeMask(vec2 p, vec2 centre, float radius, float squash) {
+  if (radius <= 0.0001) return 0.0;
+  vec2 d = (p - centre) / vec2(radius, max(radius * squash, 0.0001));
+  return 1.0 - smoothstep(1.0 - uEyeSoft, 1.0, length(d));
+}
+
+void main() {
+  float aspect = uResolution.x / max(uResolution.y, 1.0);
+
+  // Object space: a square centred on the frame, two units across, with the cat inside it.
+  vec2 p = (vUv * 2.0 - 1.0) * vec2(aspect, 1.0);
+  p = (p - uOffset) / max(uScale * (1.0 + uPulse * uLevel), 0.0001);
+
+  float drive = mix(1.0 - uReactivity, 1.0, clamp(uLevel, 0.0, 1.0));
+
+  float sd = sampleDistance(p);
+
+  // The outline breathes. Pushing noise into the distance rather than into the sample position
+  // keeps the ears' points sharp while their edges wander — the difference between a cat in a
+  // heat haze and a cat someone smeared.
+  if (uWarp > 0.0) {
+    sd += fbm(p * uWarpScale + vec2(uTime * uWarpRate, uTime * uWarpRate * 0.7)) * uWarp;
+  }
+
+  float coverage = smoothstep(-uEdgeSoft, uEdgeSoft, sd);
+
+  // Where round the outline this pixel sits, as an angle, so the ramp can start on one side and
+  // wrap. Distance says nothing about direction, so this comes from the position instead.
+  float angle = atan(p.y, p.x) - radians(uLightAngle);
+  float around = abs(mod(angle + 3.14159265, 6.28318531) - 3.14159265) / 3.14159265;
+  float ramped = mix(0.5, around, clamp(uLightWrap, 0.0, 1.0));
+
+  // Two exponentials off the outline, one running out and one running in. The reference's light
+  // is a band straddling the edge, brighter outside than in.
+  float outer = exp(min(sd, 0.0) / max(uOuterWidth, 0.0001)) * uOuterGain;
+  float inner = exp(-max(sd, 0.0) / max(uInnerWidth, 0.0001)) * uInnerGain;
+  float edge = (outer + inner) * drive;
+
+  vec3 tint = ramp(ramped);
+  vec3 colour = tint * edge + tint * uCore * coverage * drive;
+
+  float blink = clamp(1.0 - uBlink, 0.02, 1.0);
+  float eyes = clamp(eyeMask(p, uEyeA, uEyeSize, blink) + eyeMask(p, uEyeB, uEyeSize, blink), 0.0, 1.0);
+  // Masked by the body, so a blink or a drifting edge can never leave an eye hanging in the glow.
+  colour += vec3(uEyeGlow) * eyes * coverage;
+
+  // Alpha carries coverage, not opacity: the second pass needs to know where the body is to
+  // dissolve its edge and to decide how much to blur.
+  fragColor = vec4(colour, coverage);
+}
+`;
+
+/* ------------------------------------------------------------------ pass two: diffusion */
+
+/* Progressive blur out of the mip chain. A per-pixel radius done honestly would be a gather of
+   arbitrary width; choosing a level of detail per pixel is the same idea for one fetch, and the
+   trilinear filter does the widening for free. */
+const DIFFUSE_FRAG = `#version 300 es
+precision highp float;
+
+in vec2 vUv;
+
+uniform sampler2D uScene;
+uniform sampler2D uMask;
+uniform vec2 uResolution;
+uniform float uFrame;
+uniform float uScale;
+uniform vec2 uOffset;
+uniform float uPulse;
+uniform float uLevel;
+uniform float uBlur;
+uniform float uBlurReach;
+uniform float uHalo;
+uniform float uGrain;
+uniform float uGrainSize;
+uniform float uDissolve;
+uniform float uDissolveReach;
+uniform float uExposure;
+uniform float uVignette;
+uniform float uMaxLod;
+
+out vec4 fragColor;
+
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+
+vec3 aces(vec3 x) {
+  const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+float sampleDistance(vec2 p) {
+  vec2 uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return -1.0;
+  return texture(uMask, uv).r;
+}
+
+void main() {
+  float aspect = uResolution.x / max(uResolution.y, 1.0);
+  vec2 p = (vUv * 2.0 - 1.0) * vec2(aspect, 1.0);
+  p = (p - uOffset) / max(uScale * (1.0 + uPulse * uLevel), 0.0001);
+
+  float sd = sampleDistance(p);
+
+  // Sharp deep inside, fully soft at the outline and beyond. Reading the field again here rather
+  // than carrying it through pass one keeps the blur profile immune to whatever the edge drift
+  // did to the picture.
+  float depth = clamp(sd / max(uBlurReach, 0.0001), 0.0, 1.0);
+  float lod = min(uBlur * (1.0 - depth), uMaxLod);
+
+  vec4 base = textureLod(uScene, vUv, lod);
+  vec3 halo = textureLod(uScene, vUv, uMaxLod * 0.72).rgb;
+
+  // Grain in device pixels, not in uv, so it stays the same size whatever the canvas is doing.
+  vec2 grainCell = floor(gl_FragCoord.xy / max(uGrainSize, 0.25));
+  float g = hash21(grainCell + vec2(uFrame * 17.13, uFrame * 5.71)) - 0.5;
+
+  // The dissolve. Grain is subtracted from coverage near the edge, so the outline breaks into
+  // specks that thin out rather than fading as a clean ramp. Depth gates it, so the middle of
+  // the body is never eaten into however hard the edge is being chewed.
+  float bite = 1.0 - clamp(sd / max(uDissolveReach, 0.0001), 0.0, 1.0);
+  float carved = clamp(base.a + g * uDissolve * bite * 2.0, 0.0, 1.0);
+  float keep = mix(1.0, carved, bite * clamp(uDissolve, 0.0, 1.0));
+
+  vec3 colour = base.rgb * keep + halo * uHalo;
+
+  // Grain on the colour as well as in the coverage, before the tone map, weighted to the
+  // midtones so it neither speckles the hot core nor turns the black into static.
+  float lum = clamp(dot(colour, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+  float shape = 1.0 - abs(lum * 2.0 - 1.0);
+  colour += g * uGrain * (0.25 + 0.75 * shape);
+
+  colour = aces(max(colour, 0.0) * uExposure);
+
+  float r = length(vUv - 0.5);
+  colour *= 1.0 - uVignette * pow(clamp(r * 1.35, 0.0, 1.0), 2.4);
+
+  fragColor = vec4(max(colour, 0.0), 1.0);
+}
+`;
+
+const shape = link(QUAD_VERT, SHAPE_FRAG);
+const diffuse = link(QUAD_VERT, DIFFUSE_FRAG);
+
+const emptyVAO = gl.createVertexArray();
+function drawQuad() {
+  gl.bindVertexArray(emptyVAO);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* ------------------------------------------------------------------ scene target */
+
+/* One target with a full mip chain, because the chain is the blur. */
+let sceneTarget = null;
+let maxLod = 1;
+
+function buildTarget(width, height) {
+  if (sceneTarget) {
+    gl.deleteTexture(sceneTarget.texture);
+    gl.deleteFramebuffer(sceneTarget.framebuffer);
+  }
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, TARGET_FORMAT, width, height, 0, gl.RGBA, TARGET_TYPE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  sceneTarget = { texture, framebuffer, width, height };
+  maxLod = Math.floor(Math.log2(Math.max(width, height)));
+}
+
+/* ------------------------------------------------------------------ the silhouette */
+
+/* The shape is a signed distance field and nothing else — no mesh, no outline, no path. Building
+   it from a bitmap and building it from primitives are the same code past the first step, which
+   is what lets the lab run with no artwork and still be tuning the real thing the moment a PNG
+   lands. */
+
+const MASK_N = 256;
+const field = {
+  n: MASK_N,
+  sd: new Float32Array(MASK_N * MASK_N),
+  source: "primitives",
+};
+
+const maskTexture = gl.createTexture();
+
+/* Felzenszwalb & Huttenlocher's exact squared distance transform, one dimension at a time. A
+   chamfer pass would be close enough for a blur and visibly wrong for a glow profile: its error
+   lands on the diagonals, which here is both ears. */
+function edt1d(f, d, v, z, n) {
+  let k = 0;
+  v[0] = 0;
+  z[0] = -Infinity;
+  z[1] = Infinity;
+  for (let q = 1; q < n; q++) {
+    let s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    while (s <= z[k]) {
+      k--;
+      s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    }
+    k++;
+    v[k] = q;
+    z[k] = s;
+    z[k + 1] = Infinity;
+  }
+  k = 0;
+  for (let q = 0; q < n; q++) {
+    while (z[k + 1] < q) k++;
+    const dist = q - v[k];
+    d[q] = dist * dist + f[v[k]];
+  }
+}
+
+function edt2d(grid, n) {
+  const f = new Float64Array(n);
+  const d = new Float64Array(n);
+  const v = new Int32Array(n);
+  const z = new Float64Array(n + 1);
+
+  for (let x = 0; x < n; x++) {
+    for (let y = 0; y < n; y++) f[y] = grid[y * n + x];
+    edt1d(f, d, v, z, n);
+    for (let y = 0; y < n; y++) grid[y * n + x] = d[y];
+  }
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) f[x] = grid[y * n + x];
+    edt1d(f, d, v, z, n);
+    for (let x = 0; x < n; x++) grid[y * n + x] = Math.sqrt(d[x]);
+  }
+  return grid;
+}
+
+function signedDistanceFrom(inside, n) {
+  const INF = 1e12;
+  const a = new Float64Array(n * n);
+  const b = new Float64Array(n * n);
+  for (let i = 0; i < n * n; i++) {
+    a[i] = inside[i] ? INF : 0;
+    b[i] = inside[i] ? 0 : INF;
+  }
+  edt2d(a, n);
+  edt2d(b, n);
+
+  const scale = 2 / n;
+  for (let i = 0; i < n * n; i++) field.sd[i] = (inside[i] ? a[i] : -b[i]) * scale;
+}
+
+function uploadMask() {
+  gl.bindTexture(gl.TEXTURE_2D, maskTexture);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  // R16F rather than a byte: the glow profile is an exponential off this value, and a byte's
+  // 1/255 steps show up as rings in the falloff long before they show up in the silhouette.
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, MASK_N, MASK_N, 0, gl.RED, gl.FLOAT, field.sd);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+
+/* The stand-in cat: a head, a jaw, a cheek and two ears, in the reference's proportions and with
+   its asymmetry. It exists so the lab is tunable before the artwork is keyed, and so a failed key
+   is obvious rather than looking like an empty stage. */
+function primitiveInside(n) {
+  const inside = new Uint8Array(n * n);
+  const ellipse = (px, py, cx, cy, rx, ry) => {
+    const dx = (px - cx) / rx, dy = (py - cy) / ry;
+    return dx * dx + dy * dy <= 1;
+  };
+  const triangle = (px, py, ax, ay, bx, by, cx, cy) => {
+    const s = (ax - cx) * (py - cy) - (ay - cy) * (px - cx);
+    const t = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+    const u = (cx - bx) * (py - by) - (cy - by) * (px - bx);
+    return (s >= 0 && t >= 0 && u >= 0) || (s <= 0 && t <= 0 && u <= 0);
+  };
+
+  for (let y = 0; y < n; y++) {
+    const py = (y + 0.5) / n;
+    for (let x = 0; x < n; x++) {
+      const px = (x + 0.5) / n;
+      const hit =
+        ellipse(px, py, 0.52, 0.56, 0.255, 0.245) ||
+        ellipse(px, py, 0.56, 0.70, 0.215, 0.165) ||
+        ellipse(px, py, 0.66, 0.62, 0.185, 0.200) ||
+        triangle(px, py, 0.505, 0.44, 0.635, 0.185, 0.775, 0.42) ||
+        triangle(px, py, 0.205, 0.375, 0.435, 0.345, 0.415, 0.60);
+      inside[y * n + x] = hit ? 1 : 0;
+    }
+  }
+  return inside;
+}
+
+/* Keying the artwork. The source sits over white, so coverage is one minus the darkest channel:
+   that keeps a coloured glow's colour and its partial coverage, where a luminance cut throws both
+   away.
+
+   The eyes are why this is not a one-liner. They are white, inside a black head, so a plain key
+   punches two holes through the face. Anything unlit that cannot be reached from the border is
+   therefore interior, and is filled back in. */
+let sourceBitmap = null;
+
+function insideFromBitmap(bitmap, n, threshold) {
+  const work = document.createElement("canvas");
+  work.width = n;
+  work.height = n;
+  const ctx = work.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, n, n);
+
+  // Contain, not cover: the halo runs close to the artwork's edges and cropping would clip an ear.
+  const scale = Math.min(n / bitmap.width, n / bitmap.height);
+  const w = bitmap.width * scale;
+  const h = bitmap.height * scale;
+  ctx.drawImage(bitmap, (n - w) / 2, (n - h) / 2, w, h);
+
+  const pixels = ctx.getImageData(0, 0, n, n).data;
+  const inside = new Uint8Array(n * n);
+  for (let i = 0; i < n * n; i++) {
+    const r = pixels[i * 4] / 255, g = pixels[i * 4 + 1] / 255, b = pixels[i * 4 + 2] / 255;
+    const a = pixels[i * 4 + 3] / 255;
+    const coverage = (1 - Math.min(r, Math.min(g, b))) * a;
+    inside[i] = coverage >= threshold ? 1 : 0;
+  }
+
+  const seen = new Uint8Array(n * n);
+  const stack = [];
+  for (let x = 0; x < n; x++) stack.push(x, (n - 1) * n + x);
+  for (let y = 0; y < n; y++) stack.push(y * n, y * n + n - 1);
+  while (stack.length) {
+    const i = stack.pop();
+    if (seen[i] || inside[i]) continue;
+    seen[i] = 1;
+    const x = i % n, y = (i - x) / n;
+    if (x > 0) stack.push(i - 1);
+    if (x < n - 1) stack.push(i + 1);
+    if (y > 0) stack.push(i - n);
+    if (y < n - 1) stack.push(i + n);
+  }
+  for (let i = 0; i < n * n; i++) if (!inside[i] && !seen[i]) inside[i] = 1;
+
+  return inside;
+}
+
+function drawMaskPreview(inside) {
+  const preview = el("maskPreview");
+  const ctx = preview.getContext("2d");
+  const size = preview.width;
+  const image = ctx.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const sx = Math.floor((x / size) * MASK_N);
+      const sy = Math.floor((y / size) * MASK_N);
+      const lit = inside[sy * MASK_N + sx];
+      const i = (y * size + x) * 4;
+      image.data[i] = lit ? 232 : 8;
+      image.data[i + 1] = lit ? 236 : 9;
+      image.data[i + 2] = lit ? 242 : 14;
+      image.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
+function rebuildField() {
+  const inside = sourceBitmap
+    ? insideFromBitmap(sourceBitmap, MASK_N, state.keyThreshold)
+    : primitiveInside(MASK_N);
+
+  let count = 0;
+  for (let i = 0; i < inside.length; i++) count += inside[i];
+  if (count < 64) {
+    const note = el("maskNote");
+    note.dataset.tone = "warn";
+    note.textContent = "That threshold keys the whole image away. Lower it until the shape comes back.";
+    return false;
+  }
+
+  signedDistanceFrom(inside, MASK_N);
+  uploadMask();
+  field.source = sourceBitmap ? "artwork" : "primitives";
+  drawMaskPreview(inside);
+  return true;
+}
+
+/* ------------------------------------------------------------------ state */
+
+const PALETTES = {
+  night: {
+    a: [0.36, 0.82, 1.0], b: [0.62, 0.48, 1.0], c: [1.0, 0.42, 0.86],
+    note: "Cyan through violet to magenta — the reference's own edge light, warm nowhere.",
+  },
+  prism: {
+    a: [1.0, 0.82, 0.68], b: [1.0, 0.44, 0.66], c: [0.62, 0.53, 1.0],
+    note: "The orb's ramp: peach through pink to lavender. Use it to see whether the cat can share the HUD's existing colour rather than asking for its own.",
+  },
+  mumble: {
+    a: [0.78, 0.95, 0.29], b: [0.49, 0.85, 0.78], c: [0.66, 0.58, 1.0],
+    note: "Lime through mint to violet — the brand ramp already in the HUD.",
+  },
+};
+
+/* Eye anchors in object space, measured off the reference. Asymmetric on purpose: the left eye
+   sits lower and further in than the right, and evening them up is most of what would turn this
+   into a logo instead of a face. */
+const EYE_A = [-0.16, -0.10];
+const EYE_B = [ 0.24,  0.06];
+
+const state = {
+  source: "sim",
+  manual: 0.6,
+  reactivity: 0.7,
+  pulse: 0.06,
+  bloomOnVoice: 0.35,
+  keyThreshold: 0.45,
+  scale: 0.86,
+  edgeSoft: 0.02,
+  core: 0.02,
+  outerWidth: 0.09,
+  outerGain: 1.45,
+  innerWidth: 0.045,
+  innerGain: 0.85,
+  lightAngle: -42,
+  lightWrap: 0.62,
+  blur: 2.4,
+  blurReach: 0.28,
+  halo: 0.55,
+  grain: 0.26,
+  grainSize: 1.6,
+  dissolve: 0.7,
+  dissolveReach: 0.2,
+  grainRate: 10,
+  warp: 0.03,
+  warpScale: 2.4,
+  warpRate: 0.28,
+  bob: 0.03,
+  bobRate: 0.42,
+  eyeSize: 0.062,
+  eyeGlow: 2.2,
+  eyeSoft: 0.1,
+  blinkRate: 0.18,
+  exposure: 1,
+  vignette: 0.3,
+  size: "full",
+  palette: "night",
+};
+
+let level = 0;
+
+/* ------------------------------------------------------------------ level sources */
+
+function simulatedLevel(t) {
+  const phrase = Math.max(0, Math.sin(t * 0.34) * 0.62 + 0.34);
+  const syllable = (0.58 + 0.42 * Math.sin(t * 26.0)) * (0.72 + 0.28 * Math.sin(t * 61.0 + 1.3));
+  return Math.min(1, phrase * syllable * 1.15);
+}
+
+let analyser = null;
+let micData = null;
+let micError = "";
+
+async function startMic() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const context = new (window.AudioContext || window.webkitAudioContext)();
+    const source = context.createMediaStreamSource(stream);
+    analyser = context.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    micData = new Float32Array(analyser.fftSize);
+    micError = "";
+  } catch {
+    analyser = null;
+    micError = "The browser refused microphone access here. Open the page in its own tab and try again.";
+  }
+  renderSourceNote();
+}
+
+function micLevel() {
+  if (!analyser || !micData) return 0;
+  analyser.getFloatTimeDomainData(micData);
+  let sum = 0;
+  for (let i = 0; i < micData.length; i++) sum += micData[i] * micData[i];
+  const rms = Math.sqrt(sum / micData.length);
+  const db = 20 * Math.log10(Math.max(rms, 1e-7));
+  return Math.max(0, Math.min(1, (db + 50) / 50));
+}
+
+/* ------------------------------------------------------------------ controls */
+
+function bindSlider(id, key, format) {
+  const input = el(id);
+  const out = el(id + "Out");
+  const apply = () => {
+    const value = parseFloat(input.value);
+    state[key] = value;
+    out.innerHTML = format(value);
+    if (key === "keyThreshold" && rebuildField()) renderMaskNote();
+    writeExport();
+  };
+  input.addEventListener("input", apply);
+  return apply;
+}
+
+const fixed = (n) => (v) => v.toFixed(n);
+
+/* The field has to exist before the first frame samples it, and before the key-threshold slider
+   is allowed to rebuild it. */
+rebuildField();
+
+const applyFns = [
+  bindSlider("keyThreshold", "keyThreshold", fixed(2)),
+  bindSlider("scale", "scale", fixed(2)),
+  bindSlider("edgeSoft", "edgeSoft", fixed(3)),
+  bindSlider("core", "core", fixed(3)),
+  bindSlider("outerWidth", "outerWidth", fixed(3)),
+  bindSlider("outerGain", "outerGain", fixed(2)),
+  bindSlider("innerWidth", "innerWidth", fixed(3)),
+  bindSlider("innerGain", "innerGain", fixed(2)),
+  bindSlider("lightAngle", "lightAngle", (v) => v.toFixed(0) + "°"),
+  bindSlider("lightWrap", "lightWrap", fixed(2)),
+  bindSlider("blur", "blur", fixed(2)),
+  bindSlider("blurReach", "blurReach", fixed(2)),
+  bindSlider("halo", "halo", fixed(2)),
+  bindSlider("grain", "grain", fixed(3)),
+  bindSlider("grainSize", "grainSize", fixed(1)),
+  bindSlider("dissolve", "dissolve", fixed(2)),
+  bindSlider("dissolveReach", "dissolveReach", fixed(2)),
+  bindSlider("grainRate", "grainRate", (v) => String(Math.round(v))),
+  bindSlider("warp", "warp", fixed(3)),
+  bindSlider("warpScale", "warpScale", fixed(2)),
+  bindSlider("warpRate", "warpRate", fixed(2)),
+  bindSlider("bob", "bob", fixed(3)),
+  bindSlider("bobRate", "bobRate", fixed(2)),
+  bindSlider("eyeSize", "eyeSize", fixed(3)),
+  bindSlider("eyeGlow", "eyeGlow", fixed(2)),
+  bindSlider("eyeSoft", "eyeSoft", fixed(2)),
+  bindSlider("blinkRate", "blinkRate", fixed(2)),
+  bindSlider("manual", "manual", fixed(2)),
+  bindSlider("reactivity", "reactivity", fixed(2)),
+  bindSlider("pulse", "pulse", fixed(3)),
+  bindSlider("bloomOnVoice", "bloomOnVoice", fixed(2)),
+  bindSlider("exposure", "exposure", fixed(2)),
+  bindSlider("vignette", "vignette", fixed(2)),
+];
+for (const apply of applyFns) apply();
+
+function renderMaskNote() {
+  const note = el("maskNote");
+  note.dataset.tone = "";
+  note.textContent = field.source === "artwork"
+    ? "Keyed from the artwork you dropped. The white ground is gone and the eyes were filled back in as holes, not background."
+    : "Drawn from primitives, so the lab runs with no artwork. Drop a PNG on the stage to key the real cat out of its white ground.";
+}
+
+function renderSourceNote() {
+  const note = el("sourceNote");
+  if (state.source === "sim") {
+    note.dataset.tone = "";
+    note.innerHTML = "A synthetic speech envelope — syllables at about 4&nbsp;Hz, with pauses for breath.";
+  } else if (state.source === "manual") {
+    note.dataset.tone = "";
+    note.textContent = "Held at a fixed level, for judging one amplitude at a time.";
+  } else if (micError) {
+    note.dataset.tone = "warn";
+    note.textContent = micError;
+  } else if (analyser) {
+    note.dataset.tone = "";
+    note.textContent = "Live from your microphone, mapped the same way the Swift capture maps it.";
+  } else {
+    note.dataset.tone = "";
+    note.textContent = "Asking for microphone access…";
+  }
+}
+
+document.querySelectorAll("[data-source]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.source = button.dataset.source;
+    document.querySelectorAll("[data-source]").forEach((other) => {
+      other.setAttribute("aria-pressed", String(other === button));
+    });
+    el("manualField").hidden = state.source !== "manual";
+    if (state.source === "mic" && !analyser) startMic();
+    renderSourceNote();
+  });
+});
+
+document.querySelectorAll("[data-palette]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.palette = button.dataset.palette;
+    document.querySelectorAll("[data-palette]").forEach((other) => {
+      other.setAttribute("aria-pressed", String(other === button));
+    });
+    el("paletteNote").innerHTML = PALETTES[state.palette].note;
+    writeExport();
+  });
+});
+
+/* ------------------------------------------------------------------ artwork intake */
+
+async function adoptImage(blob) {
+  try {
+    sourceBitmap = await createImageBitmap(blob);
+  } catch {
+    const note = el("maskNote");
+    note.dataset.tone = "warn";
+    note.textContent = "That file did not decode as an image.";
+    return;
+  }
+  if (rebuildField()) {
+    renderMaskNote();
+    writeExport();
+  }
+}
+
+el("pickBtn").addEventListener("click", () => el("fileInput").click());
+el("fileInput").addEventListener("change", (event) => {
+  const file = event.target.files && event.target.files[0];
+  if (file) adoptImage(file);
+});
+
+const stage = el("stage");
+["dragenter", "dragover"].forEach((name) => {
+  stage.addEventListener(name, (event) => {
+    event.preventDefault();
+    stage.dataset.drop = "true";
+  });
+});
+["dragleave", "drop"].forEach((name) => {
+  stage.addEventListener(name, (event) => {
+    event.preventDefault();
+    delete stage.dataset.drop;
+  });
+});
+stage.addEventListener("drop", (event) => {
+  const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+  if (file) adoptImage(file);
+});
+
+/* Opened from a file:// URL this fetch is blocked, which is expected and is why dropping the file
+   is the documented path. Served over http it picks the artwork up on its own. */
+fetch("cat-source.png")
+  .then((response) => (response.ok ? response.blob() : Promise.reject(new Error("absent"))))
+  .then((blob) => adoptImage(blob))
+  .catch(() => {});
+
+/* ------------------------------------------------------------------ export */
+
+function writeExport() {
+  const palette = PALETTES[state.palette];
+  const hex = (c) => "#" + c.map((v) => Math.round(Math.min(1, v) * 255).toString(16).padStart(2, "0")).join("");
+  el("exportBlock").textContent =
+`enum CatParameters {
+  // Silhouette — baked, ${field.source}
+  static let maskResolution = ${MASK_N}
+  static let keyThreshold: Float = ${state.keyThreshold.toFixed(2)}
+  static let scale: Float = ${state.scale.toFixed(2)}
+
+  // Body
+  static let edgeSoftness: Float = ${state.edgeSoft.toFixed(3)}
+  static let core: Float = ${state.core.toFixed(3)}
+
+  // Edge light
+  static let outerWidth: Float = ${state.outerWidth.toFixed(3)}
+  static let outerGain: Float = ${state.outerGain.toFixed(2)}
+  static let innerWidth: Float = ${state.innerWidth.toFixed(3)}
+  static let innerGain: Float = ${state.innerGain.toFixed(2)}
+  static let lightAngle: Float = ${state.lightAngle.toFixed(0)}
+  static let lightWrap: Float = ${state.lightWrap.toFixed(2)}
+
+  // Diffusion
+  static let blur: Float = ${state.blur.toFixed(2)}
+  static let blurReach: Float = ${state.blurReach.toFixed(2)}
+  static let halo: Float = ${state.halo.toFixed(2)}
+
+  // Grain
+  static let grain: Float = ${state.grain.toFixed(3)}
+  static let grainSize: Float = ${state.grainSize.toFixed(1)}
+  static let dissolve: Float = ${state.dissolve.toFixed(2)}
+  static let dissolveReach: Float = ${state.dissolveReach.toFixed(2)}
+  static let grainRate: Float = ${state.grainRate.toFixed(0)}
+
+  // Motion
+  static let warp: Float = ${state.warp.toFixed(3)}
+  static let warpScale: Float = ${state.warpScale.toFixed(2)}
+  static let warpRate: Float = ${state.warpRate.toFixed(2)}
+  static let bob: Float = ${state.bob.toFixed(3)}
+  static let bobRate: Float = ${state.bobRate.toFixed(2)}
+
+  // Eyes
+  static let eyeA = SIMD2<Float>(${EYE_A[0].toFixed(3)}, ${EYE_A[1].toFixed(3)})
+  static let eyeB = SIMD2<Float>(${EYE_B[0].toFixed(3)}, ${EYE_B[1].toFixed(3)})
+  static let eyeSize: Float = ${state.eyeSize.toFixed(3)}
+  static let eyeGlow: Float = ${state.eyeGlow.toFixed(2)}
+  static let eyeSoftness: Float = ${state.eyeSoft.toFixed(2)}
+  static let blinkRate: Float = ${state.blinkRate.toFixed(2)}
+
+  // Drive
+  static let reactivity: Float = ${state.reactivity.toFixed(2)}
+  static let pulse: Float = ${state.pulse.toFixed(3)}
+  static let voiceIntoDiffusion: Float = ${state.bloomOnVoice.toFixed(2)}
+
+  // Post
+  static let exposure: Float = ${state.exposure.toFixed(2)}
+  static let vignette: Float = ${state.vignette.toFixed(2)}
+
+  // ${state.palette} ramp
+  static let colorA = ${hex(palette.a)}
+  static let colorB = ${hex(palette.b)}
+  static let colorC = ${hex(palette.c)}
+}`;
+}
+
+el("copyBtn").addEventListener("click", async () => {
+  const button = el("copyBtn");
+  try {
+    await navigator.clipboard.writeText(el("exportBlock").textContent);
+    button.textContent = "Copied";
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents(el("exportBlock"));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    button.textContent = "Selected — press ⌘C";
+  }
+  setTimeout(() => { button.textContent = "Copy parameters"; }, 1800);
+});
+
+/* The mask leaves as a signed distance PNG rather than as a silhouette: the shader needs the
+   distance, not the coverage, and re-deriving it on the Metal side would mean shipping the
+   distance transform too. 0.5 is the outline, up is inside. */
+el("maskBtn").addEventListener("click", () => {
+  const out = document.createElement("canvas");
+  out.width = MASK_N;
+  out.height = MASK_N;
+  const ctx = out.getContext("2d");
+  const image = ctx.createImageData(MASK_N, MASK_N);
+  for (let i = 0; i < MASK_N * MASK_N; i++) {
+    const encoded = Math.round(Math.max(0, Math.min(1, field.sd[i] * 0.5 + 0.5)) * 255);
+    image.data[i * 4] = encoded;
+    image.data[i * 4 + 1] = encoded;
+    image.data[i * 4 + 2] = encoded;
+    image.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(image, 0, 0);
+  const anchor = document.createElement("a");
+  anchor.download = "cat-mask-sdf.png";
+  anchor.href = out.toDataURL("image/png");
+  anchor.click();
+});
+
+/* ------------------------------------------------------------------ framing */
+
+const SIZES = {
+  full: { width: null, height: null, capsule: false,
+    note: "Fills the window. The presets are the HUD's real sizes — grain and blur are measured in pixels, so they only behave honestly at the true resolution." },
+  pill: { width: 420, height: 112, capsule: true,
+    note: "The HUD capsule at 420&times;112. Grain size is in device pixels, so it does not shrink with the frame: expect to want it finer here." },
+  orb: { width: 96, height: 96, capsule: false,
+    note: "96&times;96 — the square the orb gets at the left of the capsule, and the size that decides whether the cat survives contact with the HUD. Watch the ears." },
+  slot: { width: 84, height: 32, capsule: false,
+    note: "The 84&times;32 the waveform occupies today. A cat in a letterbox: worth looking at once, mostly to rule it out." },
+};
+
+function applySize(name) {
+  const preset = SIZES[name];
+  state.size = name;
+  if (preset.width) {
+    canvas.style.width = preset.width + "px";
+    canvas.style.height = preset.height + "px";
+    canvas.dataset.sized = "true";
+    canvas.dataset.capsule = preset.capsule ? "true" : "false";
+  } else {
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    delete canvas.dataset.sized;
+    delete canvas.dataset.capsule;
+  }
+  el("sizeNote").innerHTML = preset.note;
+}
+
+document.querySelectorAll("[data-size]").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll("[data-size]").forEach((other) => {
+      other.setAttribute("aria-pressed", String(other === button));
+    });
+    applySize(button.dataset.size);
+  });
+});
+
+/* ------------------------------------------------------------------ blink */
+
+/* Scheduled rather than driven off a sine, because a periodic blink reads as a metronome. The
+   interval is the rate with a wide jitter on it, and the blink is a fast close, slower open. */
+let nextBlink = 2.5;
+let blinkStart = -10;
+
+function blinkAmount(t) {
+  if (state.blinkRate <= 0.0001) return 0;
+  if (t > nextBlink) {
+    blinkStart = t;
+    nextBlink = t + (0.55 + Math.random() * 1.4) / state.blinkRate;
+  }
+  const age = t - blinkStart;
+  const close = 0.07, open = 0.13;
+  if (age < 0 || age > close + open) return 0;
+  return age < close ? age / close : 1 - (age - close) / open;
+}
+
+/* ------------------------------------------------------------------ loop */
+
+let pixelRatio = 1;
+
+function resize() {
+  pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(2, Math.round(canvas.clientWidth * pixelRatio));
+  const height = Math.max(2, Math.round(canvas.clientHeight * pixelRatio));
+  if (canvas.width === width && canvas.height === height && sceneTarget) return;
+  canvas.width = width;
+  canvas.height = height;
+  buildTarget(width, height);
+}
+
+function useTexture(location, texture, unit) {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.uniform1i(location, unit);
+}
+
+let frames = 0;
+let fpsClock = 0;
+let previous = 0;
+
+function frame(now) {
+  const t = now / 1000;
+  const dt = previous ? Math.min(t - previous, 0.1) : 0.016;
+  previous = t;
+
+  resize();
+
+  let target;
+  if (state.source === "manual") target = state.manual;
+  else if (state.source === "mic") target = micLevel();
+  else target = reduceMotion ? 0.45 : simulatedLevel(t);
+  level += (target - level) * (1 - Math.exp(-dt * 14));
+
+  const offsetY = reduceMotion ? 0 : Math.sin(t * state.bobRate * Math.PI * 2) * state.bob;
+  const blink = reduceMotion ? 0 : blinkAmount(t);
+  const palette = PALETTES[state.palette];
+
+  // ---- pass one: the cat, into the mip-chained target.
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+  gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+  gl.disable(gl.BLEND);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  gl.useProgram(shape.program);
+  useTexture(shape.u.uMask, maskTexture, 0);
+  gl.uniform2f(shape.u.uResolution, sceneTarget.width, sceneTarget.height);
+  gl.uniform1f(shape.u.uTime, reduceMotion ? 0 : t);
+  gl.uniform1f(shape.u.uLevel, level);
+  gl.uniform1f(shape.u.uReactivity, state.reactivity);
+  gl.uniform1f(shape.u.uScale, state.scale);
+  gl.uniform2f(shape.u.uOffset, 0, offsetY);
+  gl.uniform1f(shape.u.uPulse, state.pulse);
+  gl.uniform1f(shape.u.uEdgeSoft, state.edgeSoft);
+  gl.uniform1f(shape.u.uCore, state.core);
+  gl.uniform1f(shape.u.uOuterWidth, state.outerWidth);
+  gl.uniform1f(shape.u.uOuterGain, state.outerGain);
+  gl.uniform1f(shape.u.uInnerWidth, state.innerWidth);
+  gl.uniform1f(shape.u.uInnerGain, state.innerGain);
+  gl.uniform1f(shape.u.uLightAngle, state.lightAngle);
+  gl.uniform1f(shape.u.uLightWrap, state.lightWrap);
+  gl.uniform1f(shape.u.uWarp, reduceMotion ? 0 : state.warp);
+  gl.uniform1f(shape.u.uWarpScale, state.warpScale);
+  gl.uniform1f(shape.u.uWarpRate, state.warpRate);
+  gl.uniform2fv(shape.u.uEyeA, EYE_A);
+  gl.uniform2fv(shape.u.uEyeB, EYE_B);
+  gl.uniform1f(shape.u.uEyeSize, state.eyeSize);
+  gl.uniform1f(shape.u.uEyeGlow, state.eyeGlow);
+  gl.uniform1f(shape.u.uEyeSoft, state.eyeSoft);
+  gl.uniform1f(shape.u.uBlink, blink);
+  gl.uniform3fv(shape.u.uColorA, palette.a);
+  gl.uniform3fv(shape.u.uColorB, palette.b);
+  gl.uniform3fv(shape.u.uColorC, palette.c);
+  drawQuad();
+
+  // The chain is the blur, so it is rebuilt every frame the cat moves — which is every frame.
+  gl.bindTexture(gl.TEXTURE_2D, sceneTarget.texture);
+  gl.generateMipmap(gl.TEXTURE_2D);
+
+  // ---- pass two: progressive blur, dissolve, grain, tone map.
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(diffuse.program);
+  useTexture(diffuse.u.uScene, sceneTarget.texture, 0);
+  useTexture(diffuse.u.uMask, maskTexture, 1);
+  gl.uniform2f(diffuse.u.uResolution, canvas.width, canvas.height);
+  // Quantised, so Boil is a rate in new grains per second rather than whatever the display runs at.
+  gl.uniform1f(diffuse.u.uFrame, reduceMotion ? 1 : Math.floor(t * state.grainRate));
+  gl.uniform1f(diffuse.u.uScale, state.scale);
+  gl.uniform2f(diffuse.u.uOffset, 0, offsetY);
+  gl.uniform1f(diffuse.u.uPulse, state.pulse);
+  gl.uniform1f(diffuse.u.uLevel, level);
+  gl.uniform1f(diffuse.u.uBlur, state.blur + state.bloomOnVoice * level);
+  gl.uniform1f(diffuse.u.uBlurReach, state.blurReach);
+  gl.uniform1f(diffuse.u.uHalo, state.halo);
+  gl.uniform1f(diffuse.u.uGrain, state.grain);
+  gl.uniform1f(diffuse.u.uGrainSize, state.grainSize * pixelRatio);
+  gl.uniform1f(diffuse.u.uDissolve, state.dissolve);
+  gl.uniform1f(diffuse.u.uDissolveReach, state.dissolveReach);
+  gl.uniform1f(diffuse.u.uExposure, state.exposure);
+  gl.uniform1f(diffuse.u.uVignette, state.vignette);
+  gl.uniform1f(diffuse.u.uMaxLod, maxLod);
+  drawQuad();
+
+  frames++;
+  if (t - fpsClock > 0.5) {
+    el("fpsOut").textContent = Math.round(frames / (t - fpsClock));
+    el("resOut").textContent = canvas.width + "×" + canvas.height;
+    frames = 0;
+    fpsClock = t;
+  }
+  el("levelOut").textContent = level.toFixed(2);
+  el("levelFill").style.transform = "scaleX(" + level.toFixed(3) + ")";
+
+  requestAnimationFrame(frame);
+}
+
+if (!floatOK) {
+  const note = document.createElement("p");
+  note.className = "note";
+  note.dataset.tone = "warn";
+  note.textContent = "No float render targets here, so the edge light clips at white and the ramp loses its top end. Everything still runs.";
+  el("rail").appendChild(note);
+}
+
+applySize("full");
+renderMaskNote();
+renderSourceNote();
+writeExport();
+requestAnimationFrame(frame);
+</script>
