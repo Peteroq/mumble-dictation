@@ -128,9 +128,11 @@ jobs:
 
           # A load path back into the runner's scratch dir would run there and
           # nowhere else. System and OS Swift libraries are fine.
+          # The first line of `otool -L` is the binary's own path, which sits
+          # under MumbleBuild — that is the file being inspected, not a dependency.
           echo "--- otool -L ---"
           otool -L "$bin"
-          if otool -L "$bin" | grep -E 'MumbleBuild|/Users/runner/work|\.build/'; then
+          if otool -L "$bin" | sed '1d' | grep -E 'MumbleBuild|/Users/runner/work|\.build/'; then
             echo "::error::binary links a build-tree path"
             exit 1
           fi
