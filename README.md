@@ -6,7 +6,46 @@ Claude tier.
 
 ---
 
+## Install a release
+
+Apple silicon, macOS 26 or later. Each push to `main` builds the app and attaches
+`Mumble-<version>-<commit>-arm64.zip` to a
+[GitHub Release](https://github.com/Peteroq/mumble-dictation/releases/latest).
+
+Unzip it and move `Mumble.app` to `/Applications`. The build is ad-hoc signed, so
+Gatekeeper treats a downloaded copy as damaged until the quarantine flag is cleared:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Mumble.app
+open /Applications/Mumble.app
+```
+
+Grant Accessibility and Microphone the same way as a source install, below, and
+quit and reopen Mumble after granting Accessibility. Replacing the app with a
+newer zip changes the ad-hoc signature, so Accessibility has to be granted again.
+
+The zip name is the marketing version and the short commit it was built from.
+The same identity is inside the app:
+
+```bash
+cat /Applications/Mumble.app/Contents/Resources/VERSION.txt
+```
+
+`CFBundleVersion` in that file is the GitHub Actions run number. `commit` is the
+full git commit.
+
+From a terminal with the GitHub CLI, the latest zip is:
+
+```bash
+gh release download --repo Peteroq/mumble-dictation --pattern 'Mumble-*-arm64.zip'
+```
+
+---
+
 ## Get started
+
+Building from source needs full Xcode. To install a build GitHub already produced,
+follow [Install a release](#install-a-release).
 
 Four steps, about five minutes, most of it Xcode downloading Swift packages.
 
@@ -262,8 +301,10 @@ without that and the sphere fills in solid.
 
 ## Requirements
 
-macOS 26+, Xcode with a Swift 6.2 toolchain, Apple silicon recommended (the orb and Parakeet
-both want the GPU and Neural Engine).
+A published build runs on Apple silicon with macOS 26 or later.
+
+Building from source needs Xcode with a Swift 6.2 toolchain. The orb and Parakeet both want
+the GPU and Neural Engine.
 
 ## License
 

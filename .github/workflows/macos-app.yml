@@ -1,0 +1,252 @@
+name: macOS app
+
+# Builds Mumble.app on GitHub's macOS 26 runners, which have Xcode, and uploads a
+# zipped bundle. A push to main also attaches that zip to a GitHub Release, so a
+# Mac without Xcode can install it.
+#
+# Signing is ad-hoc on purpose. This repo has no Apple Developer certificate, and
+# an ad-hoc signature is what `make app` produces when the keychain has none.
+# The Windows workflow is a separate file and is not part of this build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Also attach the zip to a GitHub Release
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    # Exact version tags (v0.1.0). Build tags created by this workflow look like
+    # v0.1.0-<sha> and do not match, so publishing a release cannot retrigger it.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    paths:
+      - 'Sources/**'
+      - 'Resources/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'Makefile'
+      - '.github/workflows/macos-app.yml'
+  pull_request:
+    paths:
+      - 'Sources/**'
+      - 'Resources/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'Makefile'
+      - '.github/workflows/macos-app.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-app-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  app:
+    name: Build Mumble.app
+    # macos-latest is still the macOS 15 image. The package targets macOS 26, so
+    # the build has to run on the macos-26 runner, where Xcode.app is Xcode 26.
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      # pull_request's github.sha is a merge commit that does not exist on the
+      # branch. Stamp the head commit so the zip names a commit you can check out.
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SOURCE_REF: ${{ github.head_ref || github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          os=$(sw_vers -productVersion)
+          major=${os%%.*}
+          echo "macOS $os"
+          if [ "$major" -lt 26 ]; then
+            echo "::error::Mumble requires the macOS 26 SDK. This runner is $os."
+            exit 1
+          fi
+          if [ ! -d /Applications/Xcode.app ]; then
+            echo "::error::Xcode.app is not installed on this runner."
+            exit 1
+          fi
+          # The image's default stable Xcode. Newest-by-sort would also pick an
+          # Xcode preview once one is installed beside it.
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcode-select -p
+          xcodebuild -version
+          swift --version
+
+      - name: Build the app
+        run: |
+          set -euo pipefail
+          # `make app` is the bundle a local install uses. CONFIG=release is the
+          # published binary; nothing in Sources is behind #if DEBUG.
+          # FORCE_ADHOC keeps a runner keychain from substituting some other identity.
+          make app CONFIG=release FORCE_ADHOC=1 \
+            SOURCE_COMMIT="$SOURCE_SHA" \
+            SOURCE_REF="$SOURCE_REF" \
+            BUILD_NUMBER="$GITHUB_RUN_NUMBER" \
+            SOURCE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Verify and zip
+        id: package
+        run: |
+          set -euo pipefail
+          bundle="$HOME/Library/Caches/MumbleBuild/Mumble.app"
+          bin="$bundle/Contents/MacOS/Mumble"
+          plist="$bundle/Contents/Info.plist"
+
+          if [ ! -x "$bin" ]; then
+            echo "::error::missing executable at $bin"
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$bundle"
+          codesign -dv --verbose=4 "$bundle" > /tmp/codesign.txt 2>&1 || true
+          cat /tmp/codesign.txt
+          if ! grep -qi 'adhoc' /tmp/codesign.txt; then
+            echo "::error::expected an ad-hoc signature"
+            exit 1
+          fi
+
+          arch=$(lipo -archs "$bin")
+          echo "arch=$arch"
+          if [ "$arch" != "arm64" ]; then
+            echo "::error::expected an arm64 binary, got $arch"
+            exit 1
+          fi
+
+          # A load path back into the runner's scratch dir would run there and
+          # nowhere else. System and OS Swift libraries are fine.
+          echo "--- otool -L ---"
+          otool -L "$bin"
+          if otool -L "$bin" | grep -E 'MumbleBuild|/Users/runner/work|\.build/'; then
+            echo "::error::binary links a build-tree path"
+            exit 1
+          fi
+
+          got=$(/usr/libexec/PlistBuddy -c 'Print :MumbleSourceCommit' "$plist")
+          if [ "$got" != "$SOURCE_SHA" ]; then
+            echo "::error::MumbleSourceCommit is '$got', expected '$SOURCE_SHA'"
+            exit 1
+          fi
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
+          build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
+          if [ "$build" != "$GITHUB_RUN_NUMBER" ]; then
+            echo "::error::CFBundleVersion is '$build', expected '$GITHUB_RUN_NUMBER'"
+            exit 1
+          fi
+          grep -q "$SOURCE_SHA" "$bundle/Contents/Resources/VERSION.txt"
+          echo "--- VERSION.txt ---"
+          cat "$bundle/Contents/Resources/VERSION.txt"
+
+          short=${SOURCE_SHA:0:7}
+          zip_name="Mumble-${version}-${short}-arm64.zip"
+          mkdir -p dist
+          # ditto, not zip: it keeps the code signature, resource forks and symlinks.
+          ditto -c -k --keepParent "$bundle" "dist/$zip_name"
+
+          check=$(mktemp -d)
+          unzip -t "dist/$zip_name"
+          unzip -q "dist/$zip_name" -d "$check"
+          codesign --verify --deep --strict "$check/Mumble.app"
+          roundtrip=$(/usr/libexec/PlistBuddy -c 'Print :MumbleSourceCommit' "$check/Mumble.app/Contents/Info.plist")
+          if [ "$roundtrip" != "$SOURCE_SHA" ]; then
+            echo "::error::zip round-trip lost the commit stamp"
+            exit 1
+          fi
+
+          echo "zip_name=$zip_name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Mumble.app"
+            echo ""
+            echo "- Zip: \`$zip_name\`"
+            echo "- Version: $version ($build)"
+            echo "- Commit: \`$SOURCE_SHA\`"
+            echo "- Ref: \`$SOURCE_REF\`"
+            echo "- Signing: ad-hoc"
+            echo ""
+            echo "Download the artifact from this run:"
+            echo ""
+            echo "\`\`\`bash"
+            echo "gh run download $GITHUB_RUN_ID -n $zip_name -R $GITHUB_REPOSITORY"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.zip_name }}
+          path: dist/${{ steps.package.outputs.zip_name }}
+          if-no-files-found: error
+          # The payload is already a ditto zip. Compressing it again only wastes time.
+          compression-level: 0
+
+      - name: Publish GitHub Release
+        # github.event.inputs, not the inputs context: the inputs context is
+        # undefined on push and pull_request and fails the workflow before it starts.
+        if: |
+          (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP_NAME: ${{ steps.package.outputs.zip_name }}
+          VERSION: ${{ steps.package.outputs.version }}
+          SHORT: ${{ steps.package.outputs.short }}
+        run: |
+          set -euo pipefail
+          zip_path="dist/$ZIP_NAME"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v${VERSION}-${SHORT}"
+          fi
+
+          cat > dist/release-notes.md <<EOF
+          Mumble ${VERSION} (\`${SHORT}\`)
+
+          Commit \`${SOURCE_SHA}\` on \`${SOURCE_REF}\`.
+          Actions run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          Apple silicon, macOS 26 or later. Unzip, move \`Mumble.app\` to \`/Applications\`, then:
+
+          \`\`\`bash
+          xattr -dr com.apple.quarantine /Applications/Mumble.app
+          open /Applications/Mumble.app
+          \`\`\`
+
+          This build is ad-hoc signed. Replacing it with a newer zip changes the code
+          signature, so grant Accessibility again afterwards.
+
+          \`CFBundleVersion\` ${GITHUB_RUN_NUMBER} is this workflow's run number. The full
+          commit is \`MumbleSourceCommit\` in Info.plist and \`Contents/Resources/VERSION.txt\`.
+          EOF
+
+          # Re-runs of the same commit update the asset in place.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$zip_path" --clobber
+            gh release edit "$tag" \
+              --title "Mumble ${VERSION} (${SHORT})" \
+              --notes-file dist/release-notes.md
+          else
+            gh release create "$tag" "$zip_path" \
+              --target "$SOURCE_SHA" \
+              --title "Mumble ${VERSION} (${SHORT})" \
+              --notes-file dist/release-notes.md
+          fi
+          echo "Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${tag}"
+          echo "Asset: $ZIP_NAME"
