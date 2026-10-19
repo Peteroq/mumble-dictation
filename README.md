@@ -115,6 +115,10 @@ tccutil reset Accessibility ai.pivotstudio.mumble
 > machine.** Quit System Settings entirely (⌘Q) before reopening — that pane caches its list
 > and will otherwise show the row you just deleted.
 
+**fn does nothing.** The menu bar names the key that is armed. Choose fn there if it
+names another key. If macOS still handles the globe key itself, set System Settings ▸
+Keyboard ▸ Press 🌐 key to ▸ **Do Nothing**, then relaunch Mumble.
+
 **The hotkey worked and then stopped after a rebuild.** You're on an ad-hoc signature. macOS
 keys permissions to the *code signature*, and an ad-hoc one changes on every single build,
 so the app you rebuilt is a different app as far as the system is concerned. The symptom is

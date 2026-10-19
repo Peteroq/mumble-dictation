@@ -4,13 +4,15 @@ import Foundation
 
 /// Which modifier key holds the mic open.
 enum PushToTalkKey: String, CaseIterable, Sendable {
-    case rightOption
     case fn
+    case rightOption
     case rightCommand
 
     var keyCode: Int64 {
         switch self {
         case .rightOption: Int64(kVK_RightOption)   // 61
+        // Historic keycode only. Apple silicon delivers the globe key's
+        // flagsChanged with a different code; matching is done on `flag`.
         case .fn: Int64(kVK_Function)               // 63
         case .rightCommand: Int64(kVK_RightCommand) // 54
         }
@@ -29,7 +31,10 @@ enum PushToTalkKey: String, CaseIterable, Sendable {
         switch self {
         case .rightOption: CGEventFlags(rawValue: 0x40)   // NX_DEVICERALTKEYMASK
         case .rightCommand: CGEventFlags(rawValue: 0x10)  // NX_DEVICERCMDKEYMASK
-        case .fn: .maskSecondaryFn                        // no left/right variant exists
+        // No left/right variant. This flag is also the whole match: the globe
+        // key's flagsChanged keycode is not reliably 63, so a keycode check
+        // drops the press and the key looks dead with Accessibility granted.
+        case .fn: .maskSecondaryFn
         }
     }
 
@@ -200,22 +205,52 @@ private final class TapState: @unchecked Sendable {
         var gestures: [HotkeyGesture] = []
 
         lock.lock()
-        guard code == keyCode else {
+        guard let nowPressed = pressedState(keyCode: code, flags: flags) else {
             lock.unlock()
             return false
         }
-        let nowPressed = flags.contains(flag)
         guard nowPressed != isPressed else {
             lock.unlock()
             return false
         }
+        // Logged only when the globe key showed up under some code other than
+        // 63, which is the case this match exists for.
+        let shiftedFnCode = flag == .maskSecondaryFn && nowPressed && code != keyCode
+        let seenCode = code
         isPressed = nowPressed
         gestures = nowPressed ? press() : release()
         let swallow = consumes
         lock.unlock()
 
+        if shiftedFnCode {
+            Log.hotkey.info("fn down matched on the fn flag, keycode \(seenCode)")
+        }
         for gesture in gestures { emit(gesture) }
         return swallow
+    }
+
+    /// Whether this flagsChanged event is our key going down (`true`) or up (`false`).
+    /// `nil` means it is some other key and must be left alone.
+    ///
+    /// Called with the lock held.
+    private func pressedState(keyCode code: Int64, flags: CGEventFlags) -> Bool? {
+        if flag == .maskSecondaryFn {
+            let fnDown = flags.contains(.maskSecondaryFn)
+            let others: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
+            let alongside = !flags.intersection(others).isEmpty
+
+            // Idle, and this is not a bare fn press. fn+arrow and fn+delete arrive
+            // with another modifier set and have to pass through; a key-up while
+            // nothing is held is not ours either.
+            if !isPressed && (!fnDown || alongside) { return nil }
+
+            // A bare hold stays down until the fn flag itself clears. Another
+            // modifier joining it is not a release.
+            return fnDown
+        }
+
+        guard code == keyCode else { return nil }
+        return flags.contains(flag)
     }
 
     // MARK: - The three gestures
@@ -377,7 +412,7 @@ final class HotkeyMonitor {
     private var tapThread: TapThread?
     private var state: TapState?
 
-    var key: PushToTalkKey = .rightOption
+    var key: PushToTalkKey = .fn
     var onPress: (() -> Void)?
     var onRelease: (() -> Void)?
     /// A double tap. The recording the first tap started keeps running with nothing held.
