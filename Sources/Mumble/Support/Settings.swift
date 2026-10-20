@@ -105,8 +105,10 @@ final class Settings {
     }
 
     private init() {
-        let raw = defaults.string(forKey: Keys.pushToTalkKey) ?? PushToTalkKey.rightOption.rawValue
-        pushToTalkKey = PushToTalkKey(rawValue: raw) ?? .rightOption
+        // fn, matching the README. A value the user picked is kept; only a
+        // missing preference falls through to this.
+        let raw = defaults.string(forKey: Keys.pushToTalkKey) ?? PushToTalkKey.fn.rawValue
+        pushToTalkKey = PushToTalkKey(rawValue: raw) ?? .fn
         // Apple by default: no download, no dependency, live text while speaking.
         engine = SpeechEngineChoice(rawValue: defaults.string(forKey: Keys.engine) ?? "") ?? .apple
         cleanupEnabled = defaults.object(forKey: Keys.cleanupEnabled) as? Bool ?? true

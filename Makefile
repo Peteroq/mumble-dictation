@@ -66,6 +66,23 @@ SIGN_ID   := -
 SIGN_NAME := ad-hoc
 endif
 
+## CI passes FORCE_ADHOC=1. Hosted runners have no Apple Developer certificate, and
+## the published app has to stay ad-hoc so it runs on a machine that has none either.
+FORCE_ADHOC ?=
+ifeq ($(FORCE_ADHOC),1)
+SIGN_ID   := -
+SIGN_NAME := ad-hoc
+endif
+
+## Empty on a local build, which ships the versions already in Resources/Info.plist.
+## CI sets them so a downloaded app records the commit that produced it. The marketing
+## version stays put; CFBundleVersion becomes BUILD_NUMBER (the Actions run number).
+SOURCE_COMMIT ?=
+SOURCE_REF ?=
+BUILD_NUMBER ?=
+SOURCE_URL ?=
+export SOURCE_COMMIT SOURCE_REF BUILD_NUMBER SOURCE_URL
+
 .PHONY: all build app run install clean icon signing doctor
 
 all: app
@@ -95,6 +112,30 @@ app: build
 	@mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources"
 	@cp $(BUILD) "$(CONTENTS)/MacOS/$(EXEC)"
 	@cp Resources/Info.plist "$(CONTENTS)/Info.plist"
+	@# Stamp before codesign so the signature covers the identity of a CI build.
+	@# A local `make app` leaves SOURCE_COMMIT empty and does not touch the plist.
+	@if [ -n "$$SOURCE_COMMIT" ]; then \
+		plist="$(CONTENTS)/Info.plist"; \
+		bn="$${BUILD_NUMBER:-}"; \
+		if [ -z "$$bn" ]; then bn=$$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$$plist"); fi; \
+		/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $$bn" "$$plist"; \
+		/usr/libexec/PlistBuddy -c "Delete :MumbleSourceCommit" "$$plist" 2>/dev/null || true; \
+		/usr/libexec/PlistBuddy -c "Add :MumbleSourceCommit string $$SOURCE_COMMIT" "$$plist"; \
+		if [ -n "$$SOURCE_REF" ]; then \
+			/usr/libexec/PlistBuddy -c "Delete :MumbleSourceRef" "$$plist" 2>/dev/null || true; \
+			/usr/libexec/PlistBuddy -c "Add :MumbleSourceRef string $$SOURCE_REF" "$$plist"; \
+		fi; \
+		{ \
+			echo "Mumble $$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$$plist")"; \
+			echo "CFBundleVersion: $$bn"; \
+			echo "commit: $$SOURCE_COMMIT"; \
+			echo "ref: $${SOURCE_REF:-}"; \
+			echo "signing: $(SIGN_NAME)"; \
+			echo "built: $$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+			if [ -n "$$SOURCE_URL" ]; then echo "run: $$SOURCE_URL"; fi; \
+		} > "$(CONTENTS)/Resources/VERSION.txt"; \
+		echo "stamped $$plist  commit $$SOURCE_COMMIT  ref $${SOURCE_REF:-}  build $$bn"; \
+	fi
 	@if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$(CONTENTS)/Resources/"; fi
 	@printf 'APPL????' > "$(CONTENTS)/PkgInfo"
 	@# Belt and braces: the staging dir isn't synced, but the copied binary can still carry

@@ -6,7 +6,46 @@ Claude tier.
 
 ---
 
+## Install a release
+
+Apple silicon, macOS 26 or later. Each push to `main` builds the app and attaches
+`Mumble-<version>-<commit>-arm64.zip` to a
+[GitHub Release](https://github.com/Peteroq/mumble-dictation/releases/latest).
+
+Unzip it and move `Mumble.app` to `/Applications`. The build is ad-hoc signed, so
+Gatekeeper treats a downloaded copy as damaged until the quarantine flag is cleared:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Mumble.app
+open /Applications/Mumble.app
+```
+
+Grant Accessibility and Microphone the same way as a source install, below, and
+quit and reopen Mumble after granting Accessibility. Replacing the app with a
+newer zip changes the ad-hoc signature, so Accessibility has to be granted again.
+
+The zip name is the marketing version and the short commit it was built from.
+The same identity is inside the app:
+
+```bash
+cat /Applications/Mumble.app/Contents/Resources/VERSION.txt
+```
+
+`CFBundleVersion` in that file is the GitHub Actions run number. `commit` is the
+full git commit.
+
+From a terminal with the GitHub CLI, the latest zip is:
+
+```bash
+gh release download --repo Peteroq/mumble-dictation --pattern 'Mumble-*-arm64.zip'
+```
+
+---
+
 ## Get started
+
+Building from source needs full Xcode. To install a build GitHub already produced,
+follow [Install a release](#install-a-release).
 
 Four steps, about five minutes, most of it Xcode downloading Swift packages.
 
@@ -75,6 +114,10 @@ tccutil reset Accessibility ai.pivotstudio.mumble
 > Always pass the bundle ID. A bare `tccutil reset Accessibility` wipes **every app on the
 > machine.** Quit System Settings entirely (⌘Q) before reopening — that pane caches its list
 > and will otherwise show the row you just deleted.
+
+**fn does nothing.** The menu bar names the key that is armed. Choose fn there if it
+names another key. If macOS still handles the globe key itself, set System Settings ▸
+Keyboard ▸ Press 🌐 key to ▸ **Do Nothing**, then relaunch Mumble.
 
 **The hotkey worked and then stopped after a rebuild.** You're on an ad-hoc signature. macOS
 keys permissions to the *code signature*, and an ad-hoc one changes on every single build,
@@ -262,8 +305,10 @@ without that and the sphere fills in solid.
 
 ## Requirements
 
-macOS 26+, Xcode with a Swift 6.2 toolchain, Apple silicon recommended (the orb and Parakeet
-both want the GPU and Neural Engine).
+A published build runs on Apple silicon with macOS 26 or later.
+
+Building from source needs Xcode with a Swift 6.2 toolchain. The orb and Parakeet both want
+the GPU and Neural Engine.
 
 ## License
 
