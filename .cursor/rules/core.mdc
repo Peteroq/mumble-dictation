@@ -1,0 +1,11 @@
+---
+description: Always-on constraints. No local macOS app builds; dictionary contract; no secrets.
+globs: []
+alwaysApply: true
+---
+
+# Core
+
+- Build and release the macOS app with `.github/workflows/macos-app.yml`. Agent sessions have no Xcode, so `swift build`, `make app`, and `make install` are not a verification path. Follow `.cursor/skills/ci-build-and-release/SKILL.md`.
+- `shared/dictionary-test-vectors.json` is the correction spec for the Swift and C# apps. After editing it, copy it to `Tests/MumbleDictionaryTests/dictionary-test-vectors.json` and keep both CI jobs green.
+- The Anthropic API key belongs in the login Keychain (`APIKeyStore`) or in `ANTHROPIC_API_KEY`. Leave keys, tokens, certificates, and `.env` files out of the repo.

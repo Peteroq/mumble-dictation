@@ -1,0 +1,34 @@
+---
+description: Swift 6 isolation, microphone and Accessibility grants, and secret handling for the macOS app.
+globs:
+  - "**/*.swift"
+  - "Resources/**/*.plist"
+  - "Resources/**/*.entitlements"
+alwaysApply: false
+---
+
+# Swift
+
+Swift 6 language mode. The app target is mostly `@MainActor`. Bundle id `ai.pivotstudio.mumble` is what TCC stores for Accessibility and Microphone.
+
+## Concurrency
+
+- A `CGEventTap` callback is a C function pointer. Keep that state off the main actor, as `TapState` does: a lock, an `@unchecked Sendable` type, gestures handed to the main queue in order. `MainActor.assumeIsolated` from inside the tap crashes in `swift_task_isCurrentExecutor`.
+- A closure written inside a `@MainActor` method inherits that isolation, and Swift inserts an executor check at the closure's entry. The hotkey tap callback is a nonisolated function at file scope (`hotkeyTapCallback`) for that reason.
+- `MainActor.assumeIsolated` asserts the caller is already on the main actor and crashes the process otherwise. The call in `engineForCurrentSetting` holds only because `beginDictation` is already there. From any other context, hop with `await MainActor.run` or `Task { @MainActor in }`.
+- `nonisolated(unsafe)` in `AudioCapture` is the audio thread's converter and callbacks, mutated on that thread or under its lock. New uses need the same reason.
+- A `Canvas` draw closure leaves `@State` alone. The VU meter keeps needle physics in a reference type the view holds.
+
+## Microphone and Accessibility
+
+Neither grant can be requested silently. The event tap is created at launch, so Mumble is relaunched after Accessibility is toggled.
+
+- `Resources/Mumble.entitlements` stays unsandboxed. `com.apple.security.app-sandbox` would make the system-wide event tap and Accessibility access impossible. Keep `com.apple.security.device.audio-input` and `com.apple.security.automation.apple-events`.
+- Microphone also needs `NSMicrophoneUsageDescription` and `NSSpeechRecognitionUsageDescription` in `Resources/Info.plist`. The in-app request is `AVCaptureDevice.requestAccess(for: .audio)`.
+- Accessibility has no granting entitlement. `Permissions.promptForAccessibility` calls `AXIsProcessTrustedWithOptions` with the string key `AXTrustedCheckOptionPrompt`. The C symbol imports as a mutable global and is unusable under checked concurrency. The user turns the row on in System Settings.
+- The `Makefile` signs with `Resources/Mumble.entitlements`. CI passes `FORCE_ADHOC=1`. An ad-hoc signature changes every build, so macOS drops both grants and the Accessibility switch can still read as on. Identity selection stays in the Makefile.
+- Reset one TCC row with `tccutil reset Accessibility ai.pivotstudio.mumble`. Always pass the bundle id. A bare `tccutil reset Accessibility` clears every app on the machine.
+
+## Secrets
+
+`APIKeyStore` writes the Anthropic key to the login Keychain under `ai.pivotstudio.mumble.anthropic-api-key`. `ANTHROPIC_API_KEY` overrides it for a terminal session and must not be copied into the Keychain by the Settings field (`storedKey` is the value that field edits). Logs, tests, plists, and commits never contain the key.
