@@ -3,6 +3,9 @@
 *.xcuserdatad
 .DS_Store
 
+# Zipped app produced for a GitHub Release. The workflow writes it; it is not source.
+/dist/
+
 # Built .app bundles, at the repo root ONLY.
 #
 # Anchored deliberately. An unanchored `*.app/` also matches `windows/src/Mumble.App/`,
