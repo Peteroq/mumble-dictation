@@ -408,18 +408,34 @@ final class DictationController {
                 }
                 self.inputDevice = device ?? self.inputDevice
 
-                // Bail out if the user already let go while we were spinning up.
-                guard case .starting = self.state else {
+                // The session is still ours, so the state is one this recording put itself in.
+                // Which one depends on a race this used to lose: the IOProc is running before
+                // `capture.start` returns, and the built-in microphone delivers its first
+                // buffer within a buffer period — so `audioBecameLive` can reach the main
+                // actor ahead of this continuation and the state is already `.listening`.
+                // Reading anything other than `.starting` as "the user let go" tore down
+                // every recording on a fast microphone, with the key still held.
+                switch self.state {
+                case .starting:
+                    // `.listening` is deliberately *not* set here. The engine is running, but
+                    // a wireless mic can be several hundred milliseconds away from producing
+                    // a sample, and calling that "listening" tells the user to start talking
+                    // into audio nobody is recording. `audioBecameLive` promotes the state
+                    // when the first buffer actually lands.
+                    self.armConnectionFeedback()
+                case .connecting, .listening:
+                    // Already live, or already being waited on. Nothing to arm.
+                    break
+                case .finishing:
+                    // Went live and was released, all before this line. `endDictation` owns
+                    // the tail; its `capture.stop()` may have landed before the device was
+                    // bound, so say it again — a second stop is a no-op.
+                    self.capture.stop()
+                    return
+                case .idle, .error:
                     await self.teardown(session: id)
                     return
                 }
-
-                // `.listening` is deliberately *not* set here. The engine is running, but a
-                // wireless mic can be several hundred milliseconds away from producing a
-                // sample, and calling that "listening" tells the user to start talking into
-                // audio nobody is recording. `audioBecameLive` promotes the state when the
-                // first buffer actually lands.
-                self.armConnectionFeedback()
 
                 self.consumeTask = Task { @MainActor in
                     do {
