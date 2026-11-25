@@ -1,0 +1,14 @@
+---
+description: Token-efficient behavior on every turn. Concise output, narrow reads, minimal diffs.
+globs: []
+alwaysApply: true
+---
+- Be concise. Skip preamble and recap.
+- For multi-file work, plan first in 8 lines or fewer.
+- Read only the files you need. Prefer search and line ranges.
+- Keep diffs minimal. Leave unchanged code unreprinted.
+- Quote only the relevant log lines.
+- Run the narrowest check that covers the change.
+- Call MCP tools only when the task needs external data.
+- If the task is ambiguous, ask one question.
+- When the task changes, suggest a new chat with a 3-line handoff.

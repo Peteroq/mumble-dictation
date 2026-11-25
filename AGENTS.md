@@ -1,220 +1,59 @@
-# Working on this repo
+# Mumble
 
-Read this before changing anything. It is written for a coding agent picking the project up
-cold, and it is mostly a list of things that look wrong but aren't, plus things that look
-fine and will bite you.
+Push-to-talk dictation for macOS. Hold a key, speak, release, and cleaned-up text is typed into whatever had focus. Speech stays on the Mac (Apple `SpeechAnalyzer`, or Parakeet via FluidAudio) unless the Claude cleanup tier is turned on.
 
----
+The macOS app is in daily use. Bundle id `ai.pivotstudio.mumble`. Requires macOS 26, Swift tools 6.2, language mode 6.
 
-## What this is
+A second app in `windows/` (C# / .NET 10, Avalonia) implements the same dictation behaviour. CI builds and tests it. A person has not yet held the key and spoken into it. Details live in `windows/README.md`.
 
-Push-to-talk dictation. Hold a key, talk, release, and cleaned-up text is typed into
-whatever had focus. Two independent implementations:
+## Layout
 
-| | macOS | Windows |
-|---|---|---|
-| Language | Swift 6 | C# / .NET 10 |
-| UI | SwiftUI | Avalonia |
-| Speech | Apple `SpeechAnalyzer`, or Parakeet via FluidAudio | Parakeet via sherpa-onnx |
-| Location | repo root | `windows/` |
+| Path | What |
+|---|---|
+| `Sources/Mumble/` | App: capture, hotkey, injection, SwiftUI, orb |
+| `Sources/MumbleDictionary/` | Correction engine. Shared contract with the C# app |
+| `Sources/MumbleCleanup/` | Guard that stops a model answering the dictation |
+| `Sources/MumbleObjC/` | One `@try` around AVAudio exceptions Swift cannot catch |
+| `Tests/` | Platform-neutral tests. They must not link the app target |
+| `shared/dictionary-test-vectors.json` | Specification for correction behaviour |
+| `Resources/` | `Info.plist`, `Mumble.entitlements`, icon |
+| `Makefile` | Assembles and signs `Mumble.app` outside the repo |
+| `.github/workflows/macos-app.yml` | App build and GitHub Release. Workflow name: `macOS app` |
+| `.github/workflows/macos.yml` | `swift test` for the dictionary contract. Workflow name: `macOS` |
+| `windows/` | Windows app |
 
-**The macOS app works and is in daily use.**
+`make app` stages the bundle in `~/Library/Caches/MumbleBuild`, not in the repo. A `.build/` directory inside the tree is a scratch path to avoid.
 
-**The Windows app is complete but has never run on real hardware.** Every layer exists;
-CI builds it, runs 63 tests, publishes a single-file executable, launches it on Windows and
-confirms the platform layer loads and constructs. What has never happened is a person
-holding the key and speaking into a microphone. Describe it that way — not as "working",
-not as "unfinished".
+## Builds and releases
 
----
+Agents cannot build this app. The owner's machine has the Command Line Tools, not full Xcode, and an agent session has no Xcode either. The app needs the macOS 26 SDK. Leave `swift build`, `make app`, and `make install` unrun. Verify through GitHub Actions.
 
-## The one rule that matters
+**App and release:** `.github/workflows/macos-app.yml` on the `macos-26` runner. It selects `/Applications/Xcode.app`, runs `make app CONFIG=release FORCE_ADHOC=1`, checks an ad-hoc arm64 signature, and uploads `Mumble-<version>-<7-char-sha>-arm64.zip`.
 
-**`shared/dictionary-test-vectors.json` is the specification for correction behaviour.**
+It starts on:
 
-Both implementations run it in CI. If you change how corrections work, change the vectors
-first, watch both sides go red, then make them green. Changing one implementation to "fix"
-a failing vector without changing the other is how the two silently diverge — and only one
-of them can be exercised by hand.
+- pull requests and pushes to `main` that change `Sources/**`, `Resources/**`, `Package.swift`, `Package.resolved`, `Makefile`, or `.github/workflows/macos-app.yml`
+- version tags `vMAJOR.MINOR.PATCH` (tags this workflow creates, `v0.1.0-<sha>`, do not match)
+- `workflow_dispatch`, input `publish_release` (boolean, default false)
 
-```bash
-swift test --filter VectorTests                    # macOS side
-cd windows && dotnet test Mumble.CrossPlatform.slnf # Windows side, runs anywhere
-```
+A push to `main`, a version tag, or a dispatch with `publish_release=true` also attaches that zip to a GitHub Release. Pull requests upload the artifact only.
 
-The Swift copy at `Tests/MumbleDictionaryTests/dictionary-test-vectors.json` is a copy, and
-CI fails if it drifts from `shared/`. After editing the shared file:
+Trigger a build of the current branch without publishing:
 
 ```bash
-cp shared/dictionary-test-vectors.json Tests/MumbleDictionaryTests/
+gh workflow run macos-app.yml --ref "$(git branch --show-current)" -f publish_release=false
 ```
 
----
+Logs, the zip name, and the release tag are in `.cursor/skills/ci-build-and-release/SKILL.md`.
 
-## Things that look like bugs and are not
+**Tests:** `.github/workflows/macos.yml` runs `swift test` on `macos-15`. It does not produce `Mumble.app`.
 
-**`dotnet build Mumble.sln` fails on macOS** with `NETSDK1073`. Expected —
-`Mumble.Platform.Windows` targets `net10.0-windows`. Use `Mumble.CrossPlatform.slnf`, which
-omits it; everything else, including the whole UI suite, builds and tests on macOS in about
-half a second.
+## Conventions
 
-**`swift build` fails with "input file was modified during the build."** The repo lives in an
-iCloud-synced folder and the sync engine touches files mid-compile. **Always build with
-`make`**, which uses `--scratch-path` outside the synced tree. A bare `swift build` also
-writes a `.build/` directory into iCloud, which makes every subsequent build minutes slower.
-If you see this error, wait a few seconds and retry.
-
-**Compare mode doesn't type anything.** By design — `Settings.compareMode` runs every engine
-on one recording and shows them side by side. If both injected, two transcripts would fight
-over one text field. This is the single most confusing behaviour in the app.
-
-**The timing column isn't comparing like with like.** Apple and Parakeet are timed on local
-compute with the clock started *after* model load. Wispr Flow's number is its own
-`e2eLatency`, which includes a network round trip and its cleanup pass. Don't present them
-as one ranking.
-
-**`MainActor.assumeIsolated` will crash the process.** It does not check the claim, it
-asserts it. Use `await MainActor.run` from any non-main-actor context. This took the app
-down once already.
-
-**Mutating `@State` inside a `Canvas` draw closure floods the log and corrupts state.** The
-VU meter keeps its needle physics in a plain reference type the view merely holds, which is
-invisible to SwiftUI's state graph. Don't "clean that up" into `@State`.
-
----
-
-## Design system
-
-`Sources/Mumble/UI/DesignSystem.swift` defines every colour, size, radius, duration
-and material token. **Views must not contain literal values.** If a component needs a number
-that isn't a token, add the token rather than inlining it.
-
-The direction is the orb, spread across the app: violet-to-pink glass over a blurred colour
-mesh, with the desktop visible through it. Three rules that are load-bearing:
-
-- **The palette is the orb's.** `DS.Color.selectionRamp` and `DS.Color.ramp` read their stops
-  from `OrbParameters.colorA/B/C`. Do not re-type those numbers anywhere — a retune of the
-  orb is supposed to carry into the app's colour, and a copy silently breaks that.
-- **Surfaces are translucent, and mostly borderless.** `DS.Color.panel`, `deck`, `cap` and
-  friends carry their alpha in the token, not at the call site. A card is a tint over the
-  window's glass; the value change *is* the edge, which is why `Card` and `Tile` draw no
-  hairline. `Inset` still does — a field has to look like somewhere text goes.
-- **The window is real glass.** `AppBackground` is mesh → `glassEffect` → chassis wash, and
-  the scene sets `.containerBackground(Color.clear, for: .window)` with
-  `.windowStyle(.hiddenTitleBar)`. Remove either and the backdrop blur has an opaque window
-  behind it, so the effect quietly becomes a flat grey rectangle.
-
-Instrumentation colours are `meterOn` / `meterFlag` / `meterHot`, and they are for state, not
-chrome. They were renamed off `meterGreen` / `meterAmber` / `meterRed` in the orb palette
-pass: the values are blue, pink and red now, and a token whose name lies about its colour is
-how the wrong one ends up on screen.
-
-The previous direction — 1980s field recorders, silver face, lime accent, "no gradients
-anywhere" — is gone as of the orb palette pass. If you find a lime in a diff, it is a leftover,
-not a survivor.
-
----
-
-## macOS specifics
-
-**Code signing is load-bearing, not cosmetic.** TCC stores a code-signing *requirement* per
-entry, not just a path. An ad-hoc signature changes every build, so the rebuilt binary stops
-satisfying the stored requirement — and the symptom lies: the Accessibility toggle still
-shows as **on** while the app is untrusted. The `Makefile` auto-detects a Developer ID via
-`security find-identity`. Don't replace that with `--sign -`.
-
-If a grant does get wedged, reset that one row — never toggle, and never omit the bundle ID:
-
-```bash
-tccutil reset Accessibility ai.pivotstudio.mumble
-```
-
-A bare `tccutil reset Accessibility` wipes every app on the machine. Then quit System
-Settings entirely (⌘Q) before reopening; the Privacy pane caches its list.
-
-**`log` may be shadowed in the user's shell.** Use `/usr/bin/log` explicitly.
-
-**Don't run the `.app` from the repo folder.** It's iCloud-synced and the sync engine can
-corrupt the signature. `make install` puts the running copy in `/Applications`.
-
----
-
-## Windows specifics
-
-The specifics below were expensive to establish and several were found the hard way. Treat
-them as load-bearing. Full detail in `windows/README.md` and `docs/PARAKEET-WINDOWS.md`.
-
-**Three pinned versions that break silently at "latest":**
-
-| Package | Pin | Why |
-|---|---|---|
-| `NAudio` | 2.3.0 | 3.x targets .NET 9+ and will not restore |
-| `Avalonia.Headless.XUnit` | 11.3.20 | 12.x requires xUnit **v3**, a different package line |
-| `org.k2fsa.sherpa.onnx` | 1.13.5 | Bundles ONNX Runtime — never also reference `Microsoft.ML.OnnxRuntime` |
-
-**Right Alt is AltGr** on German, Polish, UK, Nordic and most Latin-American layouts. Binding
-push-to-talk there — and especially suppressing it — breaks typing `@`, `€`, `\`, `|` for
-those users. Default is **Right Ctrl**, and the hook **observes without swallowing**: if the
-key-down is swallowed and the key-up escapes, the target app believes Ctrl is held forever.
-
-**UI Automation cannot inject text.** `TextPattern` is documented read-only and
-`ValuePattern` replaces a whole field rather than inserting at the caret. `SendInput` is the
-primary path, not a fallback.
-
-**`Mumble.App` loads the platform layer by reflection, not by reference.** A direct
-reference would force the UI onto `net10.0-windows` and you would lose the ability to run it
-on your own machine. Two consequences that have already bitten once: the assembly is
-invisible to `PublishSingleFile`, so it is published as a loose file beside the exe *and*
-resolved by an explicit `AssemblyLoadContext` handler; and the published self-test checks
-this, because when it breaks the app starts perfectly and then does nothing at all when the
-key is pressed.
-
-**Keep `Mumble.Platform.Windows` logic-free.** Anything living there is code CI cannot
-exercise. Retries, debouncing and device-change handling belong in the platform-neutral
-projects behind an interface — those target plain `net10.0`, so `CA1416` turns any accidental
-Win32 call into a build error.
-
-**CI is the only place the Windows code is compiled.** Warnings are errors and the analyzers
-are strict on purpose. `--no-incremental` is mandatory: Roslyn does not re-emit analyzer
-warnings on a cached build, so without it the gate proves nothing.
-
----
-
-## Regex, if you touch the dictionary
-
-The two engines are not identical. Measured across 30 cases, **9 diverged**. Two affect this
-code and are handled — don't remove either:
-
-- `RegexOptions.CultureInvariant` on the C# side, or Turkish `İ` matches `i`.
-- **NFC normalization on both sides.** macOS returns decomposed strings, so without it an
-  accented trigger silently never fires.
-
-Two more are unfixable and simply avoided: ICU folds `ß` to `ss` and .NET doesn't; .NET's `.`
-splits surrogate pairs. Stay inside the safe subset — `\b`, `\d`, `\w`, `\s`, character
-classes, greedy/lazy quantifiers, alternation, `(?<name>…)`, fixed-length lookbehind,
-lookahead, `\p{L}`, and `$1`–`$9` in replacements. Nothing else.
-
----
-
-## What isn't built
-
-1. **Command Mode** — select text, hold a second key, "make this more formal."
-2. **Onboarding** — a first-run window walking through the macOS permissions.
-3. **Notarization** (macOS) and **code signing** (Windows). Both apps are unsigned for
-   distribution, so Windows users will meet SmartScreen.
-4. **An installer** for Windows, and model download from inside the app rather than by
-   following `docs/PARAKEET-WINDOWS.md` by hand.
-
-## What no amount of CI can verify
-
-On Windows, nobody has yet held the key and spoken. Specifically unverified:
-
-- Text injection landing in a foreground app — runners have an interactive desktop but
-  cannot take the foreground.
-- A real microphone: format negotiation, the OS privacy block, unplugging mid-capture.
-- The keyboard hook firing on a physical keypress.
-- Parakeet transcribing real speech, and whether ~2 GB resident is tolerable.
-
-Everything those feed into is behind an interface and tested with fakes. The bindings
-themselves are not. **First real-hardware run should start with `--selftest`, then a single
-short dictation into Notepad.**
+- Edit correction behaviour in `shared/dictionary-test-vectors.json` first, then copy that file to `Tests/MumbleDictionaryTests/dictionary-test-vectors.json`. The Swift workflow and the Windows workflow both run it. A one-sided fix is how the two apps diverge.
+- Test targets stay independent of the `Mumble` executable. Linking the app pulls FoundationModels into the test bundle, which then fails to load on the `macos-15` runner.
+- Colours, sizes, radii, durations, and materials come from `Sources/Mumble/UI/DesignSystem.swift`. Palette stops come from `OrbParameters`. Views take tokens from there.
+- Compare mode runs every engine on one recording and types nothing, so two transcripts cannot fight over one field.
+- The app is not sandboxed. Microphone, Accessibility, Swift 6 isolation, and the API key are covered by `.cursor/rules/swift.mdc`.
+- CI signs ad-hoc (`FORCE_ADHOC=1`) because the repo has no Apple Developer certificate. The `Makefile` chooses the identity. Certificates, provisioning profiles, and API keys stay out of the tree.
+- On a Mac, the Windows projects that are not `net10.0-windows` build with `dotnet build windows/Mumble.CrossPlatform.slnf`. `Mumble.sln` fails there with `NETSDK1073`.
